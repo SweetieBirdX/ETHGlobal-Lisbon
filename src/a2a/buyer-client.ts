@@ -65,6 +65,8 @@ export interface NegotiationResponse {
    */
   taskId: string;
   contextId: string;
+  /** The owner's floor, when the seller disclosed it on a price refusal. */
+  sellerMinimumHbar?: number;
   /** Untouched result, for callers that need the task/message details. */
   raw: SendMessageResult;
 }
@@ -176,6 +178,7 @@ export async function sendNegotiationMessage(
   });
 
   const replyMetadata = extractMetadata(raw);
+  const minPrice = Number(replyMetadata["minPriceHbar"]);
 
   return {
     decision: extractDecision(raw),
@@ -183,6 +186,7 @@ export async function sendNegotiationMessage(
       typeof replyMetadata["reason"] === "string" ? replyMetadata["reason"] : undefined,
     reply: extractReply(raw),
     payment: replyMetadata["payment"] as PaymentInstruction | undefined,
+    ...(Number.isFinite(minPrice) ? { sellerMinimumHbar: minPrice } : {}),
     ...extractSession(raw),
     raw,
   };
@@ -240,6 +244,133 @@ export interface PurchaseResult {
   negotiation: NegotiationResponse;
   /** Present only when the seller accepted and the payment went through. */
   purchase?: PayAndFetchResult;
+}
+
+/** One round of an autonomous negotiation, for display and assertions. */
+export interface NegotiationRound {
+  round: number;
+  offeredPriceHbar: number;
+  decision?: string;
+  reason?: string;
+}
+
+export interface StrategyResult {
+  /** How the negotiation ended: the last reply received. */
+  negotiation: NegotiationResponse;
+  /** Every round, in order — the haggle as it happened. */
+  rounds: NegotiationRound[];
+  /** Why the buyer stopped, when it walked away without a deal. */
+  walkedAwayBecause?: string;
+  /** Present when the final round was accepted and the payment settled. */
+  purchase?: PayAndFetchResult;
+}
+
+/**
+ * Negotiates with a light strategy instead of a single take-it-or-leave-it
+ * offer. No model call — three rules an economist would recognise:
+ *
+ *  1. Only counter when countering can help. A price refusal invites a raise;
+ *     a category, data-type or identity refusal does not — no amount of money
+ *     fixes "the owner does not sell health data", so the buyer walks.
+ *  2. Offer the seller's stated floor. A price refusal discloses the owner's
+ *     minimum (prose and metadata); the rational counter is exactly that
+ *     number — never more, and no blind incremental creep.
+ *  3. The budget is a hard wall. If the floor is above budget the buyer walks
+ *     without another word, and even the settlement is capped at the budget,
+ *     so an endpoint charging more than authorised gets nothing.
+ *
+ * The seller's policy is deterministic throughout — what this adds is a buyer
+ * that *reacts* to refusals instead of giving up after one.
+ */
+export async function negotiateWithStrategy(
+  criteria: DataCriteria,
+  openingPriceHbar: number,
+  budgetHbar: number,
+  options: {
+    baseUrl?: string;
+    onStep?: (message: string) => void;
+    maxRounds?: number;
+    /** Settle the accepted offer (default true) — the fully autonomous path. */
+    pay?: boolean;
+  } = {},
+): Promise<StrategyResult> {
+  const log = options.onStep ?? (() => {});
+  const maxRounds = options.maxRounds ?? 3;
+  const baseUrl = options.baseUrl ?? SELLER_BASE_URL;
+
+  if (openingPriceHbar > budgetHbar) {
+    throw new Error(
+      `Opening offer ${openingPriceHbar} ℏ exceeds the budget ${budgetHbar} ℏ — the strategy cannot start above its own wall.`,
+    );
+  }
+
+  const rounds: NegotiationRound[] = [];
+  let offer = openingPriceHbar;
+  let response = await sendNegotiationRequest(criteria, offer, baseUrl);
+
+  for (let round = 1; ; round += 1) {
+    rounds.push({
+      round,
+      offeredPriceHbar: offer,
+      decision: response.decision,
+      reason: response.reason,
+    });
+    log(`round ${round}: offered ${offer} ℏ → ${response.decision}${response.reason ? ` (${response.reason})` : ""}`);
+
+    if (response.decision === "accept") break;
+
+    // Rule 1 — a refusal money cannot fix ends the negotiation immediately.
+    if (response.reason !== "price_too_low") {
+      const because = `refused for ${response.reason ?? "an unknown reason"} — not a matter of price, walking away`;
+      log(because);
+      return { negotiation: response, rounds, walkedAwayBecause: because };
+    }
+
+    if (round >= maxRounds) {
+      const because = `no deal within ${maxRounds} rounds — walking away`;
+      log(because);
+      return { negotiation: response, rounds, walkedAwayBecause: because };
+    }
+
+    // Rule 2 — counter at the disclosed floor; without one, split the distance
+    // to budget rather than creeping blindly.
+    const floor = response.sellerMinimumHbar;
+    const next =
+      floor !== undefined ? floor : Math.round(((offer + budgetHbar) / 2) * 100) / 100;
+
+    // Rule 3 — the budget is a wall, and a counter must actually improve.
+    if (next > budgetHbar || next <= offer) {
+      const because =
+        floor !== undefined
+          ? `the owner's floor is ${floor} ℏ and our budget is ${budgetHbar} ℏ — walking away`
+          : `cannot improve the offer within budget ${budgetHbar} ℏ — walking away`;
+      log(because);
+      return { negotiation: response, rounds, walkedAwayBecause: because };
+    }
+
+    log(`countering at ${next} ℏ${floor !== undefined ? " (the owner's stated floor)" : ""}, budget ${budgetHbar} ℏ`);
+    offer = next;
+    response = await counterOffer(response, criteria, offer, baseUrl);
+  }
+
+  if (options.pay === false || !response.payment?.url) {
+    return { negotiation: response, rounds };
+  }
+
+  // Settlement stays inside the budget too: a quote above it is refused
+  // unsigned, exactly like a quote above the negotiated price.
+  const budgetTinybar = String(Math.round(budgetHbar * 100_000_000));
+  const cap =
+    BigInt(response.payment.priceTinybar) < BigInt(budgetTinybar)
+      ? response.payment.priceTinybar
+      : budgetTinybar;
+
+  const purchase = await payAndFetch(response.payment.url, {
+    maxAmountTinybar: cap,
+    onStep: log,
+  });
+
+  return { negotiation: response, rounds, purchase };
 }
 
 /**

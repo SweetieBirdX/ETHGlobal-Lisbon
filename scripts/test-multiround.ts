@@ -4,6 +4,7 @@ import type { Task } from "@a2a-js/sdk";
 import { createSellerApp, SELLER_PORT } from "../src/a2a/seller-server.js";
 import {
   counterOffer,
+  negotiateWithStrategy,
   sendNegotiationRequest,
   type PaymentInstruction,
 } from "../src/a2a/buyer-client.js";
@@ -27,10 +28,15 @@ import { startX402Server } from "../src/x402/server.js";
  * exactly as they would be in separate negotiations. What this verifies is
  * that the two rounds are one conversation, not strangers.
  *
+ * Part 2 hands the same haggle to the buyer's own strategy: it must counter at
+ * the seller's stated floor when the refusal is about price, and walk away
+ * immediately — no counter at all — when it is not, or when the floor is above
+ * its budget.
+ *
  *   npx tsx scripts/test-multiround.ts
  *
- * Costs 0.5 HBAR: round 2's acceptance is genuinely paid, so the test leaves a
- * completed sale rather than a dangling open acceptance.
+ * Costs 1 HBAR: the manual round-2 acceptance and the strategy's autonomous
+ * deal are both genuinely paid, so nothing dangles.
  */
 
 // Proto enum values (TASK_STATE_*): 3 = COMPLETED, 6 = INPUT_REQUIRED.
@@ -132,6 +138,60 @@ async function main(): Promise<void> {
         String(error).slice(0, 140),
       );
     }
+
+    // ======================= Part 2: the buyer's own strategy ================
+
+    // A refusal money cannot fix: the strategy must walk, not counter. The
+    // budget being ample is the point — a naive raiser would keep bidding.
+    console.log("\n=== Strategy 1: swimming @ 0.3, budget 5 — must walk, not bid ===\n");
+    const walked = await negotiateWithStrategy({ category: "swimming" }, 0.3, 5, {
+      onStep: (message) => console.log(`  ${message}`),
+    });
+    record(
+      "a category refusal is never countered, whatever the budget",
+      walked.rounds.length === 1 && walked.walkedAwayBecause !== undefined,
+      walked.walkedAwayBecause ?? "",
+    );
+    record("nothing was paid on the walk-away", walked.purchase === undefined);
+
+    // The floor is above the budget: walk without a second offer.
+    console.log("\n=== Strategy 2: running @ 0.1, budget 0.3 — floor 0.4 is out of reach ===\n");
+    const priced = await negotiateWithStrategy({ category: "running" }, 0.1, 0.3, {
+      onStep: (message) => console.log(`  ${message}`),
+    });
+    record(
+      "a floor above budget ends it in one round",
+      priced.rounds.length === 1 &&
+        /floor is 0\.4/.test(priced.walkedAwayBecause ?? ""),
+      priced.walkedAwayBecause ?? "",
+    );
+
+    // The full autonomous haggle: lowball → read the floor → counter exactly
+    // there → accepted → settled, all inside one task, no human anywhere.
+    console.log("\n=== Strategy 3: running @ 0.1, budget 0.6 — haggle to a deal ===\n");
+    const deal = await negotiateWithStrategy({ category: "running" }, 0.1, 0.6, {
+      onStep: (message) => console.log(`  ${message}`),
+    });
+    record(
+      "round 1 lowball was declined for price",
+      deal.rounds[0]?.decision === "decline" && deal.rounds[0]?.reason === "price_too_low",
+    );
+    record(
+      "the counter was exactly the owner's stated floor",
+      deal.rounds[1]?.offeredPriceHbar === 0.4,
+      `countered at ${deal.rounds[1]?.offeredPriceHbar} ℏ`,
+    );
+    record("the floor offer was accepted", deal.rounds[1]?.decision === "accept");
+    record(
+      "the whole haggle stayed in one task",
+      deal.negotiation.taskId.length > 0 && /round 2/i.test(deal.negotiation.reply),
+      deal.negotiation.reply.slice(0, 110),
+    );
+    record(
+      "the autonomous deal settled on-chain",
+      deal.purchase?.status === 200 && deal.purchase?.settlement?.success === true,
+      String(deal.purchase?.settlement?.transaction),
+    );
   } finally {
     for (const server of servers) server.close();
   }

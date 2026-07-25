@@ -12,7 +12,7 @@ The web2 data-broker model collects your data, sells it to third parties, and re
 
 - **You keep the data.** Raw records never leave an encrypted local store. Buyers receive cohort *aggregates*, computed in memory and discarded.
 - **You set the rules once, in your own words.** "Sell my running and cycling data, minimum 0.4 HBAR, never my heart rate." An LLM turns that into a policy object the agent applies to every offer.
-- **Both sides are agents.** A research company's agent discovers yours, opens a negotiation, and pays — no human approves any individual transaction on either side.
+- **Both sides are agents.** A research company's agent discovers yours, opens a negotiation, and pays — no human approves any individual transaction on either side. The buyer even haggles on its own: a price refusal discloses the owner's floor, and the buyer counters exactly there if its budget reaches — or walks away when the refusal is about *what* is asked rather than what it costs.
 - **The money comes to you.** Payment settles directly to the data owner's Hedera account.
 
 Because nobody is watching each deal, trust has to be structural: the buyer proves who it is on-chain, the payment settles before data is released, and every completed exchange leaves a public record anyone can check.
@@ -150,7 +150,7 @@ npm run test:e2e       # full flow, both an accepted and a refused offer  (costs
 npm run test:errors    # network failure, timeout, insufficient balance, bad agent ids  (HCS fees only)
 npm run test:validation # compliance attestations land on Hedera and read back  (HCS fees only)
 npm run test:receipt   # receipt NFT lands in the buyer's account, replay mints nothing  (costs 0.5 ℏ)
-npm run test:rounds    # two-round negotiation in one task: decline → counter-offer → accept  (costs 0.5 ℏ)
+npm run test:rounds    # multi-round: manual counter-offer + the buyer's autonomous strategy  (costs 1 ℏ)
 npm run test:binding   # the endpoint serves only what was negotiated, once  (costs 0.5 ℏ)
 npm run verify:phase7  # runs the full flow twice, then every failure mode  (costs 1 ℏ)
 ```
@@ -204,6 +204,7 @@ What is genuinely wired up, what stands in for something, and the command that p
 |---|---|---|---|
 | Autonomous agent-to-agent negotiation (A2A) | real | `src/a2a/` | `scripts/test-negotiation.ts` |
 | Multi-round negotiation with Task lifecycle | real | `publishReply` + `counterOffer` | `npm run test:rounds` — decline → counter → accept in one task |
+| Autonomous buyer strategy (counter within budget, walk otherwise) | real, rule-based — no model call | `negotiateWithStrategy` in `src/a2a/buyer-client.ts` | `npm run test:rounds` — counters a price refusal at the stated floor; walks away from a category refusal even with 10× the budget |
 | No human approves any individual payment | real | `src/a2a/buyer-client.ts` → `src/x402/pay.ts` | `npm run test:e2e` |
 | x402 payment-gated resource on Hedera | real, 402 → sign → 200 | `src/x402/server.ts` | `npm run test:e2e`, `scripts/x402-buy.ts` |
 | Native HBAR micropayment, settled on testnet | real | facilitator blocky402, asset `0.0.0` | HashScan tx in every run |

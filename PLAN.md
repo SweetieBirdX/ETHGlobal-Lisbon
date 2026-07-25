@@ -12,6 +12,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
+> **Session 47 — autonomous buyer strategy:** the buyer haggles by itself (counter a price refusal at the seller's disclosed floor, walk away from everything else, budget as a hard wall — offers *and* settlement). Panel: "Auto-haggle up to" field. `npm run test:rounds` now 18 checks / 1 ℏ.
+>
 > **Session 46 — real Task lifecycle + multi-round:** negotiations are now genuine A2A Tasks (decline → `input-required`, accept → `completed`, unverified → `failed`); a counter-offer lands in the same task and the reply acknowledges the round; a completed task cannot be reopened. `npm run test:rounds`, 10/10. Replies are **Task-shaped now** — use the buyer-client helpers, don't assume a bare Message.
 >
 > **Session 44 — data-type enforcement + scope amendment:** `allowedDataTypes` is now enforced at the policy gate against a two-bucket taxonomy (performance / health); the store carries synthetic `cycleTracking`/`medicationCount` fields so a health request is refused against real data (**CLAUDE.md rule 7 amended**). Also: never count topic events in a window — `countTopicEventsSince` + `topicSequence()` baseline only (the windowed count slid backwards and broke `verify:phase7`).
@@ -116,6 +118,18 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (47)
+**Completed:** Autonomous buyer strategy — the buyer now **haggles on its own**, rule-based, no model call. Wired into the panel ("Auto-haggle up to" field).
+**Files changed:** `src/a2a/seller-executor.ts` — a `price_too_low` refusal now discloses the owner's floor in reply **metadata** (`minPriceHbar`); the prose always said it, this makes it machine-actionable. Only price refusals disclose anything. `src/a2a/buyer-client.ts` — `negotiateWithStrategy(criteria, opening, budget)`: three rules — (1) only counter when the refusal is about price (category/data-type/identity refusals → walk immediately, whatever the budget), (2) counter at the seller's **stated floor**, never more (fallback: split toward budget), (3) budget is a hard wall for offers AND settlement (`maxAmountTinybar` capped at budget). `NegotiationResponse.sellerMinimumHbar`. `src/web/api.ts` + `index.html` — `budget` param on `/negotiate` switches the SSE flow to the strategy; buyer steps stream as "buyer →". `scripts/test-multiround.ts` — Part 2, three strategy scenarios (now **18 checks, costs 1 ℏ**). `README.md`, `docs/demo-script.md` (beat 4 rewritten: the haggle runs in the panel now).
+**Verification:** `npx tsc --noEmit` clean. `npm run test:rounds` → **18/18**: category refusal @ budget 5 ℏ → walks in one round, no counter, nothing paid (**the discrimination is the intelligence**); floor 0.4 vs budget 0.3 → walks with the stated reason; lowball 0.1 @ budget 0.6 → counters **exactly 0.4**, accepted in the same task ("Round 2 of our negotiation…"), settles autonomously (`0.0.7162784@1784997466.318577665`, receipt #22). Regression: `test:errors` 17/17, `test:e2e` 26/26. `verify:phase7` not re-run — `recordCompletedSale` and the completion chain are untouched; the standing discipline's trigger doesn't apply.
+**What the next person should do:** Phase 9.3 — the demo script draft now has the haggle as a panel-native beat; finish timings and spoken lines.
+**Known issues / things to watch for:**
+- **The strategy is deliberately rule-based** — three rules, no LLM in the negotiation loop. Sell it as "light strategy", not AI bargaining; the honest framing is stronger.
+- A deal negotiated at 0.4 ℏ is still **charged 0.5 ℏ** by the fixed-price route (the session-28 mismatch). The strategy's budget cap covers it (budget ≥ 0.5 settles; budget 0.45 would refuse to pay after accepting — correct but odd-looking). Keep panel demos at budget ≥ 0.5.
+- The floor disclosure is one-way and minimal: category/data-type refusals reveal nothing ("not a matter of price"), so probing prices doesn't leak the catalog.
+- Panel: leaving "Auto-haggle up to" empty keeps the old single-shot behavior; the field placeholder says "off".
+- Still open: earnings sum negotiated vs charged price; `create-audit-topic.ts` FORCE guard; `vitest` + `@langchain/openai` unused.
 
 ### 2026-07-25 — Emre — Claude Code session (46)
 **Completed:** Both A2A gaps from the session-45 audit closed together — **real Task lifecycle** (phantom taskId gone) and **real multi-round negotiation**. Also: audit-trace ledger rows 65/66 deleted; `docs/demo-script.md` created as a **working draft** (9.3 still owns the finished version).

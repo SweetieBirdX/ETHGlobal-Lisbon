@@ -34,15 +34,21 @@ and receipt serial, side by side.
   and the owner's policy does not permit selling any health data. This is not
   a matter of price."*
 
-### 4. Multi-round negotiation — two agents actually haggling (~45s)
-Run `npm run test:rounds` in a visible terminal (or narrate its output):
-- Buyer opens at **0.1 ℏ** → seller declines (`price_too_low`) and leaves the
-  task **open** (`input-required`) — a genuine invitation.
-- Buyer counter-offers **0.5 ℏ** *into the same task* → seller: **"Round 2 of
-  our negotiation — last round you offered 0.1 HBAR and I declined
-  (price_too_low). Offer accepted…"** Same taskId, on screen.
-- Payment settles; a third attempt to reopen is refused by the protocol
-  itself: *"task is in a terminal state"*. A closed deal stays closed.
+### 4. Multi-round negotiation — the buyer haggles on its own (~45s)
+**In the panel:** set the offer to **0.1 ℏ**, set "Auto-haggle up to" to
+**0.6 ℏ**, send. The log shows the buyer's own strategy at work:
+- round 1: 0.1 ℏ → seller declines (`price_too_low`), task left **open**,
+  floor disclosed
+- buyer, unprompted: *"countering at 0.4 ℏ (the owner's stated floor)"* —
+  never a tinybar above what's needed, never above its budget
+- seller: **"Round 2 of our negotiation — last round you offered 0.1 HBAR and
+  I declined (price_too_low). Offer accepted…"** — same task, remembered
+- payment settles, receipt mints. **No human touched anything after "send".**
+
+One line to say out loud: the strategy only counters when money is the
+problem. Tick the health checkbox with a 100 ℏ budget — the buyer walks away
+without bidding, because no budget fixes "the owner does not sell health
+data". (`npm run test:rounds` shows all of this in one terminal, 18 checks.)
 
 ### 5. The sceptic's minute (~30s)
 Audit panel: entries read from the **mirror node**, not our app. Open the

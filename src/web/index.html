@@ -300,6 +300,10 @@
             <label for="price">Offers (ℏ)</label>
             <input id="price" type="number" step="0.1" min="0" value="0.5" />
           </div>
+          <div>
+            <label for="budget">Auto-haggle up to (ℏ)</label>
+            <input id="budget" type="number" step="0.1" min="0" placeholder="off" />
+          </div>
           <div style="flex: 0 0 auto">
             <button id="run">Send offer</button>
           </div>
@@ -535,8 +539,12 @@
         $("run-status").textContent = "Negotiating…";
 
         const health = $("request-health").checked ? "&dataTypes=cycleTracking" : "";
+        // A budget switches the buyer to its own strategy: counter a price
+        // refusal at the seller's stated floor, walk away from everything else.
+        const budgetValue = $("budget").value;
+        const budget = budgetValue ? `&budget=${encodeURIComponent(budgetValue)}` : "";
         stream = new EventSource(
-          `/api/negotiate?category=${encodeURIComponent(category)}&price=${encodeURIComponent(price)}${health}`,
+          `/api/negotiate?category=${encodeURIComponent(category)}&price=${encodeURIComponent(price)}${health}${budget}`,
         );
 
         stream.onmessage = (event) => {

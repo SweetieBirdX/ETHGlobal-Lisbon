@@ -1,5 +1,5 @@
 import { Router, type Response } from "express";
-import { negotiateAndPurchase } from "../a2a/buyer-client.js";
+import { negotiateAndPurchase, negotiateWithStrategy } from "../a2a/buyer-client.js";
 import {
   DEFAULT_POLICY_STATEMENT,
   getPolicy,
@@ -203,6 +203,9 @@ export function createApiRouter(): Router {
       typeof req.query["dataTypes"] === "string" && req.query["dataTypes"].trim()
         ? req.query["dataTypes"].split(",").map((value) => value.trim())
         : undefined;
+    // With a budget, the buyer haggles on its own: a price refusal is
+    // countered at the seller's stated floor, anything else ends it.
+    const budget = Number(req.query["budget"] ?? 0);
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -231,17 +234,25 @@ export function createApiRouter(): Router {
           (dataTypes?.length ? ` (requesting: ${dataTypes.join(", ")})` : ""),
       });
 
-      const result = await negotiateAndPurchase({ category, dataTypes }, price, {
-        onStep: (message) => {
-          if (!open) return;
-          const kind = message.includes("HTTP 402")
+      const onStep = (message: string) => {
+        if (!open) return;
+        const kind = message.includes("HTTP 402")
+          ? "payment"
+          : message.includes("signed by")
             ? "payment"
-            : message.includes("signed by")
-              ? "payment"
-              : "";
-          send("step", { who: message.startsWith("negotiation") ? "seller →" : "x402", text: message, kind });
-        },
-      });
+            : "";
+        const who = /^round |^counter|walking away|^no deal/.test(message)
+          ? "buyer →"
+          : message.startsWith("negotiation")
+            ? "seller →"
+            : "x402";
+        send("step", { who, text: message, kind });
+      };
+
+      const result =
+        budget > 0
+          ? await negotiateWithStrategy({ category, dataTypes }, price, budget, { onStep })
+          : await negotiateAndPurchase({ category, dataTypes }, price, { onStep });
 
       const { negotiation, purchase } = result;
 

@@ -90,6 +90,14 @@ export interface NegotiationResult {
   cohortSize?: number;
   /** Data types the acceptance covers — bound into the payment URL. */
   dataTypes?: string[];
+  /**
+   * The owner's floor, disclosed on a price refusal. The prose already states
+   * it ("the owner's minimum is 0.4 HBAR"); this is the same fact in a form a
+   * counter-offering agent can act on without parsing sentences. Only price
+   * refusals disclose it — a category or data-type refusal is not a matter of
+   * price, and says nothing more.
+   */
+  minPriceHbar?: number;
   /** Present only on an acceptance. */
   payment?: PaymentInstruction;
 }
@@ -446,6 +454,7 @@ export function evaluateOffer(offer: Offer, policy: DataPolicy): NegotiationResu
     return {
       decision: "decline",
       reason: "price_too_low",
+      minPriceHbar: policy.minPrice,
       reply:
         `Price too low — you offered ${offer.priceHbar} HBAR and the owner's minimum is ${policy.minPrice} HBAR ` +
         `for ${matched} data. Raise the offer and I will reconsider.`,
@@ -831,6 +840,7 @@ export class SellerExecutor implements AgentExecutor {
       metadata: {
         decision: result.decision,
         ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.minPriceHbar !== undefined ? { minPriceHbar: result.minPriceHbar } : {}),
         ...(result.cohortSize !== undefined ? { cohortSize: result.cohortSize } : {}),
         // The buyer agent pays straight from this, without reading the prose.
         ...(result.payment ? { payment: result.payment } : {}),
