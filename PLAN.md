@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 4 — A2A Agent Skeleton **complete** (4.1-4.5 done). Next: Phase 5.1 — ERC-8004 contract connections.
+**Active phase:** Phase 5 — ERC-8004 (5.1 done). Next: 5.2 — agent registration files.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -51,7 +51,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 4.5 End-to-end negotiation test
 
 ### Phase 5 — ERC-8004
-- [ ] 5.1 Contract connections
+- [x] 5.1 Contract connections
 - [ ] 5.2 Agent registration files
 - [ ] 5.3 Register the agents (→ produces `agent-ids.json`)
 - [ ] 5.4 Identity verification added to seller executor
@@ -104,6 +104,26 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (18)
+**Completed:** Phase 5.1
+**Files changed:** `src/erc8004/contracts.ts` (new) — exports `provider` (`JsonRpcProvider` on `HEDERA_JSON_RPC_URL`, default `https://testnet.hashio.io/api`, overridable by env), `identityRegistry` and `reputationRegistry` (`ethers` `Contract`s bound to the `.env` addresses), plus the two address constants. Addresses go through `getAddress()` so a malformed one fails at import with a clear message instead of surfacing later as a network error. ABIs are imported from the already-committed `src/erc8004/abis/` (commit `ce5d693`) using `with { type: "json" }` import attributes.
+**Verification:** `npx tsc --noEmit` clean. A throwaway script made **real calls against Hedera testnet**:
+```
+relay: https://testnet.hashio.io/api   chainId: 296   block: 38420272
+IdentityRegistry   0x8004A818BFB912233c491871b3d84c89A494BD9e — bytecode present
+ReputationRegistry 0x8004B663056A597Dffe9eCcC1965A193B7388713 — bytecode present
+identityRegistry.name()/symbol()/getVersion() -> AgentIdentity / AGENT / 2.0.0
+reputationRegistry.getVersion() -> 2.0.0
+reputationRegistry.getIdentityRegistry() -> 0x8004A818…BD9e (matches ours)
+```
+Both registries are live, the ABIs decode against the deployed bytecode, and the two contracts are linked to each other. Throwaway deleted.
+**What the next person should do:** Phase 5.2 — the agent registration files (metadata documents for the seller and buyer identities).
+**Known issues / things to watch for:**
+- The committed ABIs in `src/erc8004/abis/` were **diffed against upstream** (`erc-8004/erc-8004-contracts@master`) during this step: IdentityRegistry 65/65 and ReputationRegistry 35/35 entries, signatures identical. The local files are only larger on disk because of formatting/line endings.
+- The deployed registries report **version 2.0.0** — check function signatures against the local ABI rather than an older ERC-8004 draft when writing 5.3.
+- `identityRegistry` has **three overloads of `register`**; ethers requires the full signature (e.g. `identityRegistry["register(string)"]`) to disambiguate, otherwise the call is ambiguous at runtime.
+- Both contracts are bound to a **provider, not a signer** — they are read-only. Phase 5.3 must attach a `Wallet` (`contract.connect(wallet)`) to send registration transactions, and that wallet needs an ECDSA key with an EVM alias funded on testnet.
 
 ### 2026-07-25 — Emre — Claude Code session (17)
 **Completed:** Phase 4.5 — **Phase 4 is done**
