@@ -119,6 +119,15 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **Known issues / things to watch for:** ...
 ```
 
+### 2026-07-26 — Emre — Claude Code session (51) — track 1 capacity restored
+**Completed:** the loose end left by deleting licence rows #2/#3 — the capacity they had reserved is given back, so the catalogue reconciles with the ledger again.
+**Files changed:** none in `src/`; the change is one `UPDATE` against the local `catalogue.db` (gitignored). `PLAN.md` only.
+**What was done:** `UPDATE tracks SET available_shares = available_shares + 1000 WHERE id = 1 AND available_shares = 7200` — guarded on the expected value so it could not double-apply. Track 1: **7200 → 8200**.
+**Verification:** track 1 now reconciles exactly — `totalShares − availableShares = 10000 − 8200 = 1800`, and its completed licence rows (#8 150, #12 150, #16 500, #18 500, #22 500) sum to **1800**. Checked the whole catalogue the same way, comparing each track's *seeded* starting availability against its current one: tracks 1 (1800) and 5 (400) have sold capacity and both match their ledger rows exactly; the other five have sold nothing and moved not at all. No track is out of range.
+**Known issues / things to watch for:**
+- **Only track 1 was seeded at full capacity, so it is the only track whose reservations the ledger fully explains.** Tracks 2–7 are seeded *partially licensed* on purpose (`scripts/seed-catalog.ts` calls `reserveShares` after insert to represent earlier sales), and those reservations have **no licence rows behind them** — track 3 sitting at 800/10000 with an empty ledger is the demo's availability-refusal setup, not a bug. Reconcile with **seeded availability − current**, never with `totalShares − availableShares`, or five tracks will look broken.
+- The two deleted rows' payments and certificates are still real and still on-chain in the abandoned collection `0.0.9749583`; only the local ledger and capacity were rewound.
+
 ### 2026-07-26 — Emre — Claude Code session (51) — final verification + four fixes
 **Completed:** the full-system verification pass, then the four items it produced. `test:rounds` ported to the licence domain; the pre-cutover ledger rows deleted; three stale doc caveats corrected; this entry plus the P1.13 record below.
 **Files changed:** `scripts/test-multiround.ts` — **ported**: real `LicenceCriteria` (`trackId`/`shares`/`licenceType`/`territory`/`useCase`) instead of the pre-pivot `{category}`, policy **injected via `setPolicy`** (no Groq call on the critical path, same pattern as `test:e2e`), floor and quote both derived rather than hard-coded (`FLOOR_HBAR = minPricePerShareHbar × SHARES`, quote read off the track), plus two new assertions — the refusal **discloses** the floor, and the payment instruction is priced at the **quote** rather than the accepted offer. A capacity pre-check refuses to start if the track cannot cover both settlements. `README.md`, `docs/bounty-coverage.md`, `docs/demo-script.md` — stale caveats.
@@ -127,7 +136,7 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **Ledger cleanup:** licence rows **#2 and #3 deleted** — pre-cutover artifacts whose certificates (#2/#3) live in the **abandoned collection `0.0.9749583`**, not the `.env` one (`0.0.9750472`), and whose 25 ℏ offers came from the old per-percent floor. Completed licences 9 → 7.
 **What the next person should do:** the video. The code side is green.
 **Known issues / things to watch for:**
-- **Track 1's capacity no longer reconciles with the ledger by 1000 shares.** Deleting rows #2/#3 removed the rows but not the `reserveShares` they performed, so track 1 reads 7200/10000 (2800 reserved) while its remaining completed rows account for only 1800. Harmless for the demo — the panel derives capacity from `tracks`, not from the ledger — but do not "prove" one from the other. Say the word and I'll restore the 1000.
+- ~~Track 1's capacity no longer reconciles with the ledger by 1000 shares.~~ **Resolved the same day** — deleting rows #2/#3 removed the rows but not the `reserveShares` they had performed, leaving track 1 at 7200/10000 against only 1800 shares of remaining completed rows. The 1000 was restored (7200 → **8200**) and the whole catalogue now reconciles; see the entry above.
 - `test:rounds` now **costs real HBAR and consumes 1000 shares of track 1 per run** (two settlements at the track quote). It was already paid before; the capacity cost is new information, not new behaviour.
 - The suite injects its policy, so it does **not** exercise the Groq path — that is deliberate (determinism), and `test:catalog` covers the parser.
 
