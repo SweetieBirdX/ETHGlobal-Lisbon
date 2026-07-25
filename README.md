@@ -19,6 +19,8 @@ Built at **ETHGlobal Lisbon 2026**.
 | **AI & Agentic Payments on Hedera** | Two autonomous agents, real A2A protocol, real x402 micropayments on testnet, HCS-14 agent identity, HCS audit trail, HTS certificates, and a buyer that **haggles by itself** — counters at the seller's disclosed floor, walks away when money is not the problem |
 | **No Solidity** | **Zero Solidity, zero contract calls.** Hedera-native services only: HCS (consensus), HTS (tokens), Mirror Node (reads). The identity layer that would normally be an ERC-8004 contract is HCS-14 on a consensus topic instead |
 
+Requirement-by-requirement, with the command that proves each row — including what we deliberately did **not** build — is in [`docs/bounty-coverage.md`](docs/bounty-coverage.md). The five-minute demo is scripted in [`docs/demo-script.md`](docs/demo-script.md).
+
 ### The No-Solidity claim, and how to check it
 
 There is no `.sol` file, no EVM contract deployment, no contract call, and no `ethers` in our dependency list. Run this over the whole codebase:
