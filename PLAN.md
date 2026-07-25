@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 4 — A2A Agent Skeleton (4.1 done). Next: 4.2 — seller executor.
+**Active phase:** Phase 4 — A2A Agent Skeleton (4.1-4.3 done). Next: 4.4 — buyer agent client.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -45,8 +45,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ### Phase 4 — A2A Agent Skeleton
 - [x] 4.1 Seller AgentCard
-- [ ] 4.2 Seller executor (basic version)
-- [ ] 4.3 Seller agent server
+- [x] 4.2 Seller executor (basic version)
+- [x] 4.3 Seller agent server
 - [ ] 4.4 Buyer agent client
 - [ ] 4.5 End-to-end negotiation test
 
@@ -104,6 +104,34 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (15)
+**Completed:** Phase 4.3
+**Files changed:** `src/a2a/seller-server.ts` (new) — `DefaultRequestHandler(sellerAgentCard, new InMemoryTaskStore(), new SellerExecutor())` served by Express: card at `/.well-known/agent-card.json` via `agentCardHandler`, JSON-RPC at `/a2a/jsonrpc` via `jsonRpcHandler` with `UserBuilder.noAuthentication`; `legacyCompat: { enabled: true }` on both. `createSellerApp()` builds the app without listening (so 4.5 owns the lifecycle), `startSellerServer()` listens, and the file only self-starts when run directly (`process.argv[1] === fileURLToPath(import.meta.url)`).
+**Verification:** `npx tsc --noEmit` clean. Started with `npx tsx src/a2a/seller-server.ts`, then a throwaway script hit both routes:
+```
+card A2A-Version=1.0 -> 200  supportedInterfaces = 1.0+0.3   skill=data-access-negotiation
+card A2A-Version=0.3 -> 200  url=http://localhost:4000/a2a/jsonrpc
+POST /a2a/jsonrpc  message/send "…a price of 0.5 HBAR…" -> decision=accept
+POST /a2a/jsonrpc  message/send "Hi, what data do you have?" -> decision=decline
+```
+Clean exit code 0. Server stopped and throwaway deleted afterwards.
+**What the next person should do:** Phase 4.4 — the buyer agent client (`ClientFactory` from `@a2a-js/sdk/client`): fetch the card from the well-known URL and send an offer, rather than hard-coding the JSON-RPC URL.
+**Known issues / things to watch for:**
+- `SELLER_PORT` and `SELLER_JSONRPC_PATH` are **parsed out of `SELLER_AGENT_URL`** rather than written twice, so the advertised card and the actual listener cannot drift apart. Change the URL in `seller-agent-card.ts` and the server follows.
+- **Do not add `express.json()`** — `jsonRpcHandler` mounts its own body parser internally (`router.use(express.json(), …)`).
+- `jsonRpcHandler`'s `legacyCompat` only works because the card declares a **v0.3 `JSONRPC` interface**; without it, v0.3-shaped requests come back as JSON-RPC `-32601 method not found`. The two settings are a pair.
+- Calling `process.exit()` in a tsx script right after HTTP work aborts with `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING) … win\async.c` on Windows and reports exit 127 even when everything passed. Use `process.exitCode = …` and let the process end on its own.
+
+### 2026-07-25 — Emre — Claude Code session (14)
+**Completed:** Phase 4.2
+**Files changed:** `src/a2a/seller-executor.ts` (new) — `SellerExecutor implements AgentExecutor`. `execute()` reads the offer with `extractText(requestContext.userMessage)`, runs `decideOnOffer()` (keyword check: text containing "price" → accept, otherwise decline and ask for one), publishes a single `AgentEvent.message(...)` reply as `Role.ROLE_AGENT` and calls `eventBus.finished()`. `cancelTask` is an empty no-op. `extractText` and `decideOnOffer` are exported separately so Phases 5.4/6.5 can swap the decision without touching the A2A plumbing.
+**Verification:** `npx tsc --noEmit` clean. A throwaway script drove the executor through a real `DefaultExecutionEventBus` and `RequestContext` (not just the helper function) across three cases — all passed, each publishing exactly **1** event with `finished=true` and `role=AGENT`: `"We offer a price of 0.5 HBAR..."` → `decision=accept`; `"Hello, what fitness data do you have available?"` → `decision=decline`; `"Our PRICE is 1 HBAR."` → `decision=accept` (case-insensitive). `cancelTask` called after each — did not throw. Throwaway deleted.
+**What the next person should do:** Phase 4.3 — the seller agent server on port 4000, wiring `SellerExecutor` into `DefaultRequestHandler` + `jsonRpcHandler` at `/a2a/jsonrpc` (matching `SELLER_AGENT_URL`), and the card at `/.well-known/agent-card.json`.
+**Known issues / things to watch for:**
+- The decision is echoed in `message.metadata.decision` (`"accept"` / `"decline"`) so the buyer agent can branch without parsing prose — Phase 7.1 should route on that field, not on the reply text.
+- The v1.0 `Part` type is protobuf-derived: `metadata`, `filename` and `mediaType` are **required properties even for plain text** (`TS2739` otherwise). The local `textPart()` helper fills them in; reuse it in 4.3/4.4 rather than writing part literals by hand.
+- `new RequestContext(...)` takes the `SendMessageRequest` as `{ message }` directly — passing `{ request: { message } }` throws `"RequestContext requires request.message to be set."` at runtime, not at compile time.
 
 ### 2026-07-25 — Emre — Claude Code session (13)
 **Completed:** Phase 4.1
