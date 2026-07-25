@@ -31,7 +31,10 @@ import { Hbar } from "@hiero-ledger/sdk";
 
 const SERVER_URL = process.env.X402_SERVER_URL ?? "http://localhost:4021";
 const NETWORK = "hedera:testnet";
-const CRITERIA = { ageRange: "25-34", activityType: "running" };
+// Broad enough to clear the minimum cohort size — an age range *and* an
+// activity together match a single person in the seeded population, which the
+// aggregator refuses to report on.
+const CRITERIA = { activityType: "running" };
 
 function requireEnv(name: string): string {
   const value = process.env[name];

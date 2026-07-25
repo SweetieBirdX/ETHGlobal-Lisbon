@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 6 — Off-chain Data + Policy Engine (6.1-6.2 done). Next: 6.3 — cohort aggregation function.
+**Active phase:** Phase 6 — Off-chain Data + Policy Engine (6.1-6.3 done). Next: 6.4 — natural-language policy parser.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -60,7 +60,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 ### Phase 6 — Off-chain Data + Policy Engine
 - [x] 6.1 Encrypted database schema
 - [x] 6.2 Mock user data
-- [ ] 6.3 Cohort aggregation function
+- [x] 6.3 Cohort aggregation function
 - [ ] 6.4 Natural-language policy parser
 - [ ] 6.5 Policy wired into seller executor
 
@@ -104,6 +104,28 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (25)
+**Completed:** Phase 6.3 — **the mock data provider is gone; the paid endpoint now serves real aggregates over the encrypted store**
+**Files changed:** `src/data/aggregate.ts` (new) — `getCohortInsight(criteria)` decrypts in memory, filters, and returns exactly `{participantCount, avgSessionCount, avgPerformanceScore, trend}`; `MIN_COHORT_SIZE = 3` with a `CohortTooSmallError`; `parseCriteria()` whitelists query params. `src/data/provider.ts` **deleted**. `src/x402/server.ts` — route now calls the real aggregator and maps `CohortTooSmallError` to **HTTP 422**. `scripts/seed-data.ts` — added `weeklySessionCount` (the prompt requires `avgSessionCount` and no such field existed; it is generated from the same latent fitness value, 2-10/week). `scripts/x402-buy.ts` — demo criteria widened to `{activityType:"running"}`; see below.
+**Verification:** `npx tsc --noEmit` clean. Reseeded, then **15/15** unit assertions: whole population = 12; the result has **only** the four aggregate keys and no raw field names leak; each single-filter cohort = 3 participants; a **1-person slice is refused**, as is a cohort matching nobody; `parseCriteria` drops unknown params; `trend` genuinely varies (up/down/flat) rather than being constant. Then end-to-end through the **paid** x402 endpoint: unpaid → 402, paid → **200** with `{"participantCount":3,"avgSessionCount":5.3,"avgPerformanceScore":64.3,"trend":"down"}`, settlement `success=true`, tx `0.0.7162784@1784954385.615147941`.
+**Important finding — a refused cohort does NOT charge the buyer.** The first paid run hit the old hardcoded criteria (`ageRange=25-34&activityType=running`), which match **0** users, and returned 422. Checked the mirror node afterwards: **no new 0.5 ℏ transfer** — the only 0.5 ℏ transfers on the account are still the Phase 3.4/3.5 ones. x402 does not settle when the resource responds 4xx, so the privacy floor cannot cost a buyer money.
+**What the next person should do:** Phase 6.4 — natural-language policy parser (`ChatGroq`, `llama-3.3-70b-versatile`). **Pass only the few tools/schema that step needs** — the Groq free tier is 12k tokens/minute (see session 10).
+**Known issues / things to watch for:**
+- **`MIN_COHORT_SIZE = 3` combined with 12 users means every age × activity pair is refused** (each is exactly 1 person). Only single-filter queries succeed. If the demo should show a *successful* narrow query, raise `USER_COUNT` in `scripts/seed-data.ts` and reseed — this is why `scripts/x402-buy.ts` now asks for `activityType=running` alone.
+- `trend` is **not a time series** — there is no history in the data. It compares the cohort's mean score with the whole population's (±2 points = flat). Do not describe it as change over time.
+- Phase 7.1 should check cohort size **during the negotiation**, before routing the buyer to the paid endpoint, so a buyer never pays and then hits a 422.
+- `getCohortInsight` opens and closes the database per call. Fine at demo scale; if the frontend polls it, hold one connection open instead.
+
+### 2026-07-25 — Emre — Claude Code session (24b)
+**Completed:** Manual 6.2b — reviewed the seeded data and **rewrote the generator**, because the first version produced data that would not survive scrutiny.
+**What was wrong:** fields were drawn independently of each other. Runners covered 73.8 km in 125 min (**35.4 km/h**, vs a marathon world record of ~21 km/h); swimmers logged 55-60 km/week (past Olympic volume); one user had VO2 max 52.8 with a resting heart rate of 71 (fit and unfit at once); the **18-24 band had zero users**, so that cohort came back empty; and age × activity slices were mostly one person.
+**Fix:** every physiological field now derives from one latent `fitness` value (0-1) — VO2 max from an age baseline plus fitness, resting heart rate falling as fitness rises, training minutes scaling with it. Weekly distance is computed as *time × a realistic speed for the sport* (running 8.5-13.5 km/h, cycling 20-31, swimming 2.4-3.6, strength 0) instead of being drawn at random. Age range and activity are assigned by two **offset** cycles, so all four of each appear 3 times and no age band is locked to one sport.
+**Verification:** reseeded from scratch and re-ran the analysis — **zero plausibility flags** (was 5), every age range and activity has 3 users, all 12 age/activity pairs are distinct, and a separate 11/11 check confirmed encryption still holds and no out-of-scope health fields exist. Spot values now read sensibly: a 35-44 runner at 407 min/week covering 84.9 km (12.5 km/h), a 25-34 cyclist at 242.7 km/week, strength users at 0 km.
+**Known issues / things to watch for:**
+- `fitness-data.db` was **deleted and regenerated**, so any row ids referenced elsewhere are stale. The PRNG seed is unchanged, so the population is reproducible.
+- `performanceScore` remains a synthetic composite of VO2 max and resting heart rate — realistic-looking, but not a real-world metric. Do not present it as one.
+- With 12 users, **every age × activity pair is exactly 1 person**. That is the case Phase 6.3's minimum-cohort rule has to refuse: answering it would hand over one individual's record. Consider raising `USER_COUNT` if the demo wants to show a *successful* narrow query.
 
 ### 2026-07-25 — Emre — Claude Code session (24)
 **Completed:** Phase 6.2

@@ -21,9 +21,31 @@ const USER_COUNT = 12;
 const AGE_RANGES = ["18-24", "25-34", "35-44", "45-54"] as const;
 const ACTIVITY_TYPES = ["running", "cycling", "swimming", "strength"] as const;
 
+/** Typical VO2 max for an average adult in each band, before fitness is applied. */
+const VO2MAX_BASELINE: Record<(typeof AGE_RANGES)[number], number> = {
+  "18-24": 45,
+  "25-34": 43,
+  "35-44": 40,
+  "45-54": 37,
+};
+
+/**
+ * Realistic sustained speeds in km/h, used to derive weekly distance from the
+ * time actually spent training. Drawing distance independently produced
+ * runners averaging 35 km/h.
+ */
+const SPEED_KMH: Record<(typeof ACTIVITY_TYPES)[number], [number, number]> = {
+  running: [8.5, 13.5],
+  cycling: [20, 31],
+  swimming: [2.4, 3.6],
+  strength: [0, 0],
+};
+
 export interface FitnessRecord {
   ageRange: (typeof AGE_RANGES)[number];
   activityType: (typeof ACTIVITY_TYPES)[number];
+  /** Training sessions logged in a week. */
+  weeklySessionCount: number;
   weeklyActiveMinutes: number;
   weeklyDistanceKm: number;
   restingHeartRate: number;
@@ -59,24 +81,56 @@ function pick<T>(items: readonly T[]): T {
   return items[Math.floor(random() * items.length)]!;
 }
 
-function generateRecord(): FitnessRecord {
-  const activityType = pick(ACTIVITY_TYPES);
-  const restingHeartRate = between(48, 72);
-  const vo2max = between(32, 58, 1);
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+/**
+ * Builds one record around a single latent fitness level.
+ *
+ * Every physiological field derives from that one variable, so a person with a
+ * high VO2 max also has a low resting heart rate and trains more — drawing the
+ * fields independently produced people who were simultaneously very fit and
+ * very unfit.
+ */
+function generateRecord(
+  ageRange: (typeof AGE_RANGES)[number],
+  activityType: (typeof ACTIVITY_TYPES)[number],
+): FitnessRecord {
+  /** 0 = sedentary, 1 = highly trained. */
+  const fitness = random();
+
+  const vo2max = Number(
+    clamp(VO2MAX_BASELINE[ageRange] + fitness * 16 - 6 + random() * 3, 28, 62).toFixed(1),
+  );
+  // Resting heart rate falls as fitness rises; ±3 bpm of individual variation.
+  const restingHeartRate = Math.round(
+    clamp(74 - fitness * 24 + (random() * 6 - 3), 42, 80),
+  );
+
+  const weeklyActiveMinutes = Math.round(clamp(80 + fitness * 340 + random() * 60, 60, 600));
+
+  // Distance follows from time spent and a plausible speed for the sport.
+  const [minSpeed, maxSpeed] = SPEED_KMH[activityType];
+  const speed = minSpeed + fitness * (maxSpeed - minSpeed);
+  const weeklyDistanceKm = Number(((weeklyActiveMinutes / 60) * speed).toFixed(1));
+
+  // Fitter people train more often, and a session lands in a believable range
+  // (roughly 30-90 minutes) rather than one weekly four-hour epic.
+  const weeklySessionCount = Math.round(clamp(2 + fitness * 5 + random() * 2, 2, 10));
 
   return {
-    ageRange: pick(AGE_RANGES),
+    ageRange,
     activityType,
-    weeklyActiveMinutes: between(90, 480),
-    // Distance means nothing for strength work.
-    weeklyDistanceKm: activityType === "strength" ? 0 : between(8, 75, 1),
+    weeklySessionCount,
+    weeklyActiveMinutes,
+    weeklyDistanceKm,
     restingHeartRate,
     vo2max,
-    avgSleepHours: between(5.5, 8.5, 1),
+    avgSleepHours: Number(clamp(6 + fitness * 1.8 + (random() * 0.8 - 0.4), 5, 9).toFixed(1)),
     // Fitter athletes have higher VO2 max and lower resting heart rate, so the
     // aggregate reports something with a real shape rather than pure noise.
     performanceScore: Number(
-      Math.min(100, Math.max(0, vo2max * 1.4 + (72 - restingHeartRate) * 0.8)).toFixed(1),
+      clamp(vo2max * 1.4 + (72 - restingHeartRate) * 0.8, 0, 100).toFixed(1),
     ),
   };
 }
@@ -94,9 +148,17 @@ function main(): void {
     return;
   }
 
+  // Cycling through both dimensions guarantees every age range and every
+  // activity is represented — a buyer asking for a band nobody happens to fall
+  // into would otherwise get an empty cohort mid-demo. The activity index is
+  // offset so the two do not advance in lockstep, which would make every
+  // 18-24-year-old a runner and every 45-54-year-old a lifter.
   const ids: number[] = [];
   for (let i = 0; i < USER_COUNT; i += 1) {
-    ids.push(insertUser(db, generateRecord()));
+    const ageRange = AGE_RANGES[i % AGE_RANGES.length]!;
+    const activityType =
+      ACTIVITY_TYPES[(i + Math.floor(i / AGE_RANGES.length)) % ACTIVITY_TYPES.length]!;
+    ids.push(insertUser(db, generateRecord(ageRange, activityType)));
   }
 
   console.log(`Seeded ${ids.length} users into ${DEFAULT_DB_PATH}\n`);

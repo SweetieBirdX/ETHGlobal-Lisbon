@@ -6,7 +6,11 @@ import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import type { RoutesConfig } from "@x402/core/server";
 import type { Network } from "@x402/core/types";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
-import { MockDataProvider } from "../data/provider.js";
+import {
+  CohortTooSmallError,
+  getCohortInsight,
+  parseCriteria,
+} from "../data/aggregate.js";
 
 /**
  * The seller's data server — the endpoint a buyer agent is routed to once a
@@ -50,8 +54,6 @@ function requireEnv(name: string): string {
 
 const facilitatorUrl = requireEnv("X402_FACILITATOR_URL");
 const payToAccount = requireEnv("X402_PAY_TO_ACCOUNT");
-
-const provider = new MockDataProvider();
 
 /**
  * The resource server delegates verification/settlement to the facilitator and
@@ -107,10 +109,25 @@ app.use(paymentMiddleware(routes, x402Server));
 
 app.get(COHORT_INSIGHT_PATH, async (req, res) => {
   // Reaching this handler means the facilitator has verified the payment.
-  // Query params are passed straight through as the cohort criteria; the mock
-  // provider ignores them until the real aggregation lands in Phase 6.3.
-  const insight = await provider.getCohortInsight(req.query);
-  res.json(insight);
+  // Query params become the cohort filter; the records themselves are decrypted
+  // in memory and reduced to statistics, so nothing per-user leaves here.
+  try {
+    res.json(await getCohortInsight(parseCriteria(req.query)));
+  } catch (error) {
+    if (error instanceof CohortTooSmallError) {
+      // 422: the request was well-formed and paid for, but answering it would
+      // expose an individual. The negotiation should catch this before payment
+      // (Phase 7.1) so a buyer is never charged for a cohort we cannot report.
+      res.status(422).json({
+        error: "cohort_too_small",
+        message: error.message,
+        matched: error.matched,
+        minimum: error.minimum,
+      });
+      return;
+    }
+    throw error;
+  }
 });
 
 app.listen(PORT, () => {
