@@ -1,13 +1,17 @@
-import { Router, type Response } from "express";
+import { Router } from "express";
 import { negotiateAndPurchase, negotiateWithStrategy } from "../a2a/buyer-client.js";
 import {
   DEFAULT_POLICY_STATEMENT,
+  evaluateOffer,
   getPolicy,
   setPolicy,
 } from "../a2a/seller-executor.js";
-import { openDatabase, type QueryRow } from "../data/db.js";
-import { getBuyerAgentId, getSellerAgentId } from "../erc8004/agent-ids.js";
+import { quotePrice } from "../data/catalog.js";
+import { listTracks, openDatabase, type LicenceRow } from "../data/db.js";
+import { certificateTokenId } from "../hedera/certificate.js";
+import { getBuyerUaid, getSellerUaid } from "../identity/agent-ids.js";
 import { parsePolicy } from "../policy/parser.js";
+import type { LicenceGrant } from "../types/marketplace.js";
 import { toHashScanTransactionId } from "../x402/pay.js";
 
 /**
@@ -21,7 +25,7 @@ import { toHashScanTransactionId } from "../x402/pay.js";
 /** Longest policy we will send to the model. */
 const MAX_POLICY_LENGTH = 2_000;
 
-/** The statement the owner last typed, so the form can show it back. */
+/** The statement the rights holder last typed, so the form can show it back. */
 let currentStatement = DEFAULT_POLICY_STATEMENT;
 
 export function getCurrentStatement(): string {
@@ -47,11 +51,23 @@ export interface AuditEntry {
 }
 
 /**
+ * A UAID is too long to read in a header — `did:uaid:` plus a 43-character
+ * multibase key plus parameters. The Hedera account inside it is the part a
+ * viewer can actually check on HashScan, so that is what the panel leads with.
+ */
+export function shortUaid(uaid: string): string {
+  const account = /nativeId=hedera:testnet:([0-9.]+)/.exec(uaid)?.[1];
+  const key = uaid.replace(/^did:uaid:/, "").split(";")[0] ?? uaid;
+  return account ? `${account} (${key.slice(0, 8)}…)` : `${key.slice(0, 12)}…`;
+}
+
+/**
  * Turns one topic message into something displayable.
  *
- * The topic carries two shapes: the JSON entries this app writes, and the
- * plain-text lines the Hedera Agent Kit's audit hook writes. Both are real
- * history, so the view has to read both rather than assume its own format.
+ * The topic carries several shapes: the licence and attestation entries this
+ * app writes, and the plain-text lines the Hedera Agent Kit's audit hook
+ * writes. All of it is real history, so the view reads both rather than
+ * assuming its own format.
  */
 function toAuditEntry(message: MirrorTopicMessage): AuditEntry {
   const text = Buffer.from(message.message, "base64").toString("utf8");
@@ -61,14 +77,19 @@ function toAuditEntry(message: MirrorTopicMessage): AuditEntry {
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
     const event = String(parsed["event"] ?? "event");
+    const uaid = parsed["buyerUaid"] ?? parsed["agentUaid"] ?? parsed["subjectUaid"];
     const detail = [
-      parsed["buyerAgentId"] ? `buyer #${parsed["buyerAgentId"]}` : "",
-      // Compliance attestations name the subject `agentId`, matching the
-      // ValidationRegistry's own field names.
-      parsed["agentId"] ? `agent #${parsed["agentId"]}` : "",
+      // Licence sales name the buyer; attestations name their subject as
+      // `agentUaid`, matching the ValidationRegistry's own field names.
+      typeof uaid === "string" ? shortUaid(uaid) : "",
+      parsed["trackId"] !== undefined ? `track ${parsed["trackId"]}` : "",
+      parsed["shares"] !== undefined
+        ? `${parsed["shares"]} shares (${Number(parsed["shares"]) / 100}%)`
+        : "",
+      parsed["licenceType"] ? String(parsed["licenceType"]) : "",
+      parsed["useCase"] ? String(parsed["useCase"]) : "",
       parsed["response"] !== undefined ? `score ${parsed["response"]}` : "",
       parsed["priceHbar"] !== undefined ? `${parsed["priceHbar"]} ℏ` : "",
-      parsed["criteria"] ? JSON.stringify(parsed["criteria"]) : "",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -92,35 +113,58 @@ function toAuditEntry(message: MirrorTopicMessage): AuditEntry {
   }
 }
 
-function safeParse(json: string): Record<string, unknown> {
-  try {
-    return JSON.parse(json) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-/** "running, 25-34" — the cohort as a person would describe it. */
-function describeCriteria(json: string): string {
-  const parsed = safeParse(json);
-  return [parsed["activityType"], parsed["ageRange"]].filter(Boolean).join(", ");
+/** "500 shares (5%) sync · film" — the licence as a person would describe it. */
+function describeLicence(row: LicenceRow): string {
+  return (
+    `${row.shares} shares (${row.shares / 100}%) ${row.licence_type}` +
+    ` · ${row.use_case}${row.territory && row.territory !== "worldwide" ? ` · ${row.territory}` : ""}`
+  );
 }
 
 /**
- * Waits for the post-payment chain to mark a query completed.
+ * Why a refused offer was refused.
  *
- * The audit and reputation writes are Hedera transactions that run after the
- * buyer already has its data, so the only honest way to report them is to look.
+ * The ledger records *that* an offer was declined, not why, so the reason is
+ * recomputed by running the stored terms back through the same pure policy
+ * function the seller used. Under an unchanged policy that reproduces the
+ * original verdict exactly; if the rights holder has since rewritten their
+ * rules, it reports how the offer reads under the policy in force now — which
+ * is why the response labels it `reasonDerived`.
  */
-async function waitForCompletion(queryId: number, timeoutMs: number): Promise<boolean> {
+async function declineReason(row: LicenceRow): Promise<string> {
+  try {
+    const verdict = evaluateOffer(
+      {
+        trackId: row.track_id,
+        shares: row.shares,
+        licenceType: row.licence_type,
+        territory: row.territory,
+        useCase: row.use_case,
+        priceHbar: row.price,
+      },
+      await getPolicy(),
+    );
+    return verdict.reason ?? "policy";
+  } catch {
+    return "policy";
+  }
+}
+
+/**
+ * Waits for the post-payment chain to mark a licence completed.
+ *
+ * The audit, reputation, capacity and certificate writes all run after the
+ * buyer already has its grant, so the only honest way to report them is to look.
+ */
+async function waitForCompletion(licenceId: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     const db = openDatabase();
     try {
       const row = db
-        .prepare("SELECT status FROM queries WHERE id = ?")
-        .get(queryId) as { status: string } | undefined;
+        .prepare("SELECT status FROM licences WHERE id = ?")
+        .get(licenceId) as { status: string } | undefined;
       if (row?.status === "completed") return true;
     } finally {
       db.close();
@@ -137,9 +181,13 @@ export function createApiRouter(): Router {
   /** Who the agents are, and the policy currently in force. */
   api.get("/status", async (_req, res) => {
     try {
+      const sellerUaid = getSellerUaid();
+      const buyerUaid = getBuyerUaid();
       res.json({
-        sellerAgentId: getSellerAgentId(),
-        buyerAgentId: getBuyerAgentId(),
+        sellerUaid,
+        buyerUaid,
+        sellerLabel: shortUaid(sellerUaid),
+        buyerLabel: shortUaid(buyerUaid),
         policyStatement: currentStatement,
         policy: await getPolicy(),
         network: "hedera:testnet",
@@ -150,17 +198,44 @@ export function createApiRouter(): Router {
   });
 
   /**
-   * Replaces the owner's policy from a sentence typed in the form.
+   * The rights holder's catalogue — what the buyer agent can bid on.
    *
-   * The parsed result is returned so the owner can see exactly what their words
-   * were understood to mean before an agent starts trading on them.
+   * Free and unauthenticated, like the x402 server's own `/catalog`: an agent
+   * (or a demo operator) has to be able to see what is on offer before there is
+   * anything to negotiate about.
+   */
+  api.get("/catalog", (_req, res) => {
+    const db = openDatabase();
+    try {
+      res.json({
+        tracks: listTracks(db).map((track) => ({
+          trackId: track.id,
+          title: track.title,
+          artist: track.artist,
+          totalShares: track.total_shares,
+          availableShares: track.available_shares,
+          basePricePerShareHbar: track.base_price_per_share,
+        })),
+      });
+    } catch (error) {
+      res.status(500).json({ error: String(error).slice(0, 200) });
+    } finally {
+      db.close();
+    }
+  });
+
+  /**
+   * Replaces the rights holder's policy from a sentence typed in the form.
+   *
+   * The parsed result is returned so they can see exactly what their words were
+   * understood to mean before an agent starts licensing on them.
    */
   api.post("/policy", async (req, res) => {
     const statement = typeof req.body?.statement === "string" ? req.body.statement.trim() : "";
 
     if (!statement) {
       res.status(400).json({
-        error: "Describe what you are willing to sell — the policy cannot be empty.",
+        error: "Describe what you are willing to license — the policy cannot be empty.",
       });
       return;
     }
@@ -191,18 +266,16 @@ export function createApiRouter(): Router {
    * Runs one full negotiation and streams it as it happens.
    *
    * Server-sent events rather than a single response, because the point of the
-   * demo is the *sequence* — identity checked, policy applied, payment signed,
-   * data released, trail written — not the final answer.
+   * demo is the *sequence* — identity checked, policy applied, availability
+   * checked, payment signed, licence granted, trail written — not the final
+   * answer.
    */
   api.get("/negotiate", async (req, res) => {
-    const category = String(req.query["category"] ?? "running");
+    const trackId = Number(req.query["trackId"] ?? 1);
+    const shares = Number(req.query["shares"] ?? 500);
+    const licenceType = String(req.query["licenceType"] ?? "sync");
+    const useCase = String(req.query["useCase"] ?? "film");
     const price = Number(req.query["price"] ?? 0.5);
-    // Optional specific data types (e.g. the health-bucket "cycleTracking"),
-    // so the panel can demonstrate the policy gate refusing a health request.
-    const dataTypes =
-      typeof req.query["dataTypes"] === "string" && req.query["dataTypes"].trim()
-        ? req.query["dataTypes"].split(",").map((value) => value.trim())
-        : undefined;
     // With a budget, the buyer haggles on its own: a price refusal is
     // countered at the seller's stated floor, anything else ends it.
     const budget = Number(req.query["budget"] ?? 0);
@@ -230,8 +303,8 @@ export function createApiRouter(): Router {
       send("step", {
         who: "buyer →",
         text:
-          `offers ${price} ℏ for ${category} cohort data` +
-          (dataTypes?.length ? ` (requesting: ${dataTypes.join(", ")})` : ""),
+          `offers ${price} ℏ for a ${licenceType} licence on track ${trackId} — ` +
+          `${shares} shares (${shares / 100}%), for ${useCase}`,
       });
 
       const onStep = (message: string) => {
@@ -249,10 +322,11 @@ export function createApiRouter(): Router {
         send("step", { who, text: message, kind });
       };
 
+      const criteria = { trackId, shares, licenceType, useCase };
       const result =
         budget > 0
-          ? await negotiateWithStrategy({ category, dataTypes }, price, budget, { onStep })
-          : await negotiateAndPurchase({ category, dataTypes }, price, { onStep });
+          ? await negotiateWithStrategy(criteria, price, budget, { onStep })
+          : await negotiateAndPurchase(criteria, price, { onStep });
 
       const { negotiation, purchase } = result;
 
@@ -266,9 +340,9 @@ export function createApiRouter(): Router {
 
       if (negotiation.decision !== "accept") {
         send("done", {
-          // The refusal is noted in the owner's own ledger, but nothing was
-          // paid and nothing went on-chain — say exactly that.
-          text: "No payment, no HCS entry, no reputation write — the refusal is logged for the owner only.",
+          // The refusal is noted in the rights holder's own ledger, but nothing
+          // was paid and nothing went on-chain — say exactly that.
+          text: "No payment, no HCS entry, no certificate — the refusal is logged for the rights holder only.",
           kind: "decline",
         });
         res.end();
@@ -282,32 +356,41 @@ export function createApiRouter(): Router {
         hashscanUrl: purchase?.settlement?.hashscanUrl,
       });
 
+      // The endpoint's body is typed as unknown JSON; the grant shape is what
+      // this route is documented to return.
+      const grant = purchase?.data as Partial<LicenceGrant> | undefined;
       send("data", {
         who: "buyer ←",
-        text: `received aggregate ${JSON.stringify(purchase?.data)}`,
+        text:
+          `licence granted — ${grant?.sharePercent}% of "${grant?.title}" ` +
+          `by ${grant?.artist}, master ref released`,
         data: purchase?.data,
         kind: "accept",
       });
 
-      // The audit and reputation writes happen after the buyer has its data,
-      // so the panel waits for them rather than claiming they are done.
-      send("step", { who: "seller", text: "writing HCS audit entry and ERC-8004 feedback…" });
+      // The audit, reputation, capacity and certificate writes happen after the
+      // buyer has its grant, so the panel waits for them rather than claiming
+      // they are done.
+      send("step", {
+        who: "seller",
+        text: "writing HCS audit entry, reputation feedback and minting the certificate…",
+      });
 
-      const queryId = Number(
-        new URL(negotiation.payment!.url).searchParams.get("queryId") ?? 0,
+      const licenceId = Number(
+        new URL(negotiation.payment!.url).searchParams.get("licenceId") ?? 0,
       );
-      const completed = await waitForCompletion(queryId, 45_000);
+      const completed = await waitForCompletion(licenceId, 45_000);
 
       if (completed) {
         send("chain", {
           who: "hedera",
-          text: `audit trail and reputation recorded — query #${queryId} marked completed`,
+          text: `audit trail, reputation and certificate recorded — licence #${licenceId} marked completed`,
           kind: "accept",
         });
       } else {
         send("chain", {
           who: "hedera",
-          text: `still settling — query #${queryId} has not been marked completed yet`,
+          text: `still settling — licence #${licenceId} has not been marked completed yet`,
           kind: "",
         });
       }
@@ -366,54 +449,88 @@ export function createApiRouter(): Router {
   });
 
   /**
-   * What the owner has earned, straight out of the negotiation ledger.
+   * What the rights holder has earned, straight out of the licence ledger.
    *
-   * `sales` lists completed sales only — money actually received. Refusals are
-   * counted separately rather than mixed into the table, because "what the
-   * agent turned down" is a different claim from "what the owner was paid".
+   * `licences` lists completed grants only — money actually received. Refusals
+   * are listed separately rather than mixed in, because "what the agent turned
+   * down" is a different claim from "what the rights holder was paid".
+   *
+   * The amount shown is what the endpoint **charged** (`quotePrice`: shares ×
+   * the track's per-share rate), not what the buyer offered. A buyer bidding
+   * above the quote still pays the quote, so totalling the offers would
+   * overstate what actually landed.
    */
-  api.get("/earnings", (_req, res) => {
-    const receiptToken = process.env.HTS_RECEIPT_TOKEN_ID;
+  api.get("/earnings", async (_req, res) => {
+    const licenceToken = certificateTokenId();
     const db = openDatabase();
     try {
       const rows = db
-        .prepare("SELECT * FROM queries ORDER BY id DESC LIMIT 100")
-        .all() as QueryRow[];
+        .prepare(
+          `SELECT licences.*, tracks.title AS track_title, tracks.artist AS track_artist
+             FROM licences JOIN tracks ON tracks.id = licences.track_id
+            ORDER BY licences.id DESC LIMIT 100`,
+        )
+        .all() as (LicenceRow & { track_title: string; track_artist: string })[];
 
       const completed = rows.filter((row) => row.status === "completed");
       const declined = rows.filter((row) => row.status === "declined");
-      const totalEarnedHbar = completed.reduce((sum, row) => sum + row.price, 0);
+
+      const licences = await Promise.all(
+        completed.map(async (row) => {
+          const chargedHbar = await quotePrice(row.track_id, row.shares);
+          return {
+            id: row.id,
+            buyerUaid: row.buyer_uaid,
+            buyerLabel: shortUaid(row.buyer_uaid),
+            trackId: row.track_id,
+            title: row.track_title,
+            artist: row.track_artist,
+            shares: row.shares,
+            sharePercent: row.shares / 100,
+            licenceType: row.licence_type,
+            territory: row.territory,
+            useCase: row.use_case,
+            /** What the endpoint charged — the amount that actually settled. */
+            chargedHbar,
+            /** What the buyer offered during the negotiation. */
+            offeredHbar: row.price,
+            summary: describeLicence(row),
+            txHash: row.tx_hash,
+            hashscanUrl: row.tx_hash
+              ? `https://hashscan.io/testnet/transaction/${toHashScanTransactionId(row.tx_hash)}`
+              : null,
+            certificateSerial: row.certificate_serial,
+            certificateUrl:
+              row.certificate_serial && licenceToken
+                ? `https://hashscan.io/testnet/token/${licenceToken}/${row.certificate_serial}`
+                : null,
+            createdAt: row.created_at,
+          };
+        }),
+      );
+
+      const refusals = await Promise.all(
+        declined.slice(0, 10).map(async (row) => ({
+          id: row.id,
+          buyerLabel: shortUaid(row.buyer_uaid),
+          title: row.track_title,
+          summary: describeLicence(row),
+          offeredHbar: row.price,
+          reason: await declineReason(row),
+          createdAt: row.created_at,
+        })),
+      );
 
       res.json({
-        totalEarnedHbar: Number(totalEarnedHbar.toFixed(4)),
+        totalEarnedHbar: Number(
+          licences.reduce((sum, licence) => sum + licence.chargedHbar, 0).toFixed(4),
+        ),
         completedCount: completed.length,
         declinedCount: declined.length,
-        sales: completed.map((row) => ({
-          id: row.id,
-          buyerAgentId: row.buyer_agent_id,
-          criteria: describeCriteria(row.criteria),
-          price: row.price,
-          status: row.status,
-          txHash: row.tx_hash,
-          hashscanUrl: row.tx_hash
-            ? `https://hashscan.io/testnet/transaction/${toHashScanTransactionId(row.tx_hash)}`
-            : null,
-          // Rows from before receipts existed carry NULL and render as "—".
-          receiptSerial: row.receipt_serial,
-          receiptUrl:
-            row.receipt_serial && receiptToken
-              ? `https://hashscan.io/testnet/token/${receiptToken}/${row.receipt_serial}`
-              : null,
-          createdAt: row.created_at,
-        })),
-        declines: declined.slice(0, 10).map((row) => ({
-          id: row.id,
-          buyerAgentId: row.buyer_agent_id,
-          criteria: describeCriteria(row.criteria),
-          price: row.price,
-          reason: safeParse(row.criteria)["declineReason"] ?? "policy",
-          createdAt: row.created_at,
-        })),
+        /** Refusal reasons are recomputed from the policy — see `declineReason`. */
+        reasonDerived: true,
+        licences,
+        refusals,
       });
     } catch (error) {
       res.status(500).json({ error: String(error).slice(0, 200) });

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Personal Fitness Data Marketplace</title>
+    <title>Your music, your terms</title>
     <style>
       :root {
         color-scheme: dark;
@@ -184,6 +184,8 @@
       }
       td { padding: 9px 10px; border-bottom: 1px solid var(--line); }
       tr:last-child td { border-bottom: 0; }
+      .track-cell { font-weight: 600; }
+      .track-cell small { display: block; font-weight: 400; color: var(--muted); }
       .pill {
         display: inline-block;
         padding: 2px 8px;
@@ -199,6 +201,7 @@
       .status { font-size: 12px; color: var(--muted); min-height: 18px; }
       .status.error { color: var(--danger); }
       .declines { font-size: 12px; color: var(--muted); margin: 12px 0 0; line-height: 1.6; }
+      .hint { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
 
       .audit { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
       .audit-entry {
@@ -221,13 +224,13 @@
   <body>
     <header>
       <div>
-        <h1><span class="mark" aria-hidden="true"></span>Personal Fitness Data Marketplace</h1>
+        <h1><span class="mark" aria-hidden="true"></span>Your music, your terms</h1>
         <p class="sub">
-          Your agent negotiates on your behalf. You set the rules once — no transaction asks for your approval.
+          Your agent licenses your tracks on your behalf. You set the terms once — no deal asks for your approval.
         </p>
       </div>
       <div class="agents">
-        <span>seller <b id="seller-agent">—</b></span>
+        <span>rights holder <b id="seller-agent">—</b></span>
         <span>buyer <b id="buyer-agent">—</b></span>
         <span>network <b class="net">hedera:testnet</b></span>
       </div>
@@ -237,31 +240,31 @@
       <div class="col">
         <!-- 1. Policy -->
         <section class="panel">
-          <h2>Your policy</h2>
-          <label for="policy">Describe what you are willing to sell, in your own words</label>
-          <textarea id="policy" rows="5" placeholder="e.g. You can sell aggregated statistics from my running and cycling data…"></textarea>
+          <h2>Your terms</h2>
+          <label for="policy">Describe what you are willing to license, in your own words</label>
+          <textarea id="policy" rows="5" placeholder="e.g. Sell sync licences for my tracks, at least 0.05 HBAR per share, never more than 50% in total, and never for political advertising."></textarea>
           <div class="actions">
-            <button id="save-policy">Save policy</button>
+            <button id="save-policy">Save terms</button>
             <button id="reset-policy" class="secondary">Reset</button>
           </div>
           <p class="status" id="policy-status"></p>
-          <div class="parsed" id="policy-parsed">No policy loaded yet.</div>
+          <div class="parsed" id="policy-parsed">No terms loaded yet.</div>
         </section>
 
         <!-- 3. Earnings -->
         <section class="panel">
-          <h2>Earnings</h2>
+          <h2>Licences sold</h2>
           <div class="stats">
             <div class="stat earn"><div class="value" id="stat-earned">0 ℏ</div><div class="label">Earned</div></div>
-            <div class="stat"><div class="value" id="stat-sales">0</div><div class="label">Sales</div></div>
-            <div class="stat"><div class="value" id="stat-declined">0</div><div class="label">Declined</div></div>
+            <div class="stat"><div class="value" id="stat-sales">0</div><div class="label">Licences</div></div>
+            <div class="stat"><div class="value" id="stat-declined">0</div><div class="label">Refused</div></div>
           </div>
           <table>
             <thead>
-              <tr><th>When</th><th>Buyer</th><th>Cohort</th><th>Price</th><th>Payment</th><th>Receipt</th></tr>
+              <tr><th>When</th><th>Buyer</th><th>Track</th><th>Licence</th><th>Paid</th><th>Payment</th><th>Certificate</th></tr>
             </thead>
             <tbody id="sales-body">
-              <tr><td colspan="6" class="empty">No sales yet.</td></tr>
+              <tr><td colspan="7" class="empty">No licences sold yet.</td></tr>
             </tbody>
           </table>
           <p class="declines" id="declines"></p>
@@ -287,18 +290,42 @@
       <section class="panel">
         <h2>Live negotiation</h2>
         <div class="row">
+          <div style="flex: 1 1 220px">
+            <label for="track">Track</label>
+            <select id="track">
+              <option value="">loading catalogue…</option>
+            </select>
+          </div>
           <div>
-            <label for="category">Buyer wants</label>
-            <select id="category">
-              <option value="running">running</option>
-              <option value="cycling">cycling</option>
-              <option value="swimming">swimming</option>
-              <option value="strength">strength</option>
+            <label for="shares">Shares (10000 = 100%)</label>
+            <input id="shares" type="number" step="100" min="1" max="10000" value="500" />
+          </div>
+          <div>
+            <label for="licence-type">Licence type</label>
+            <select id="licence-type">
+              <option value="sync">sync</option>
+              <option value="mechanical">mechanical</option>
+              <option value="sampling">sampling</option>
+              <option value="performance">performance</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px">
+          <div>
+            <!-- political-ad sits in the list on purpose: the refusal the whole
+                 policy gate exists for is one click away on camera. -->
+            <label for="use-case">Use case</label>
+            <select id="use-case">
+              <option value="film">film</option>
+              <option value="game">game</option>
+              <option value="advertising">advertising</option>
+              <option value="documentary">documentary</option>
+              <option value="political-ad">political-ad</option>
             </select>
           </div>
           <div>
             <label for="price">Offers (ℏ)</label>
-            <input id="price" type="number" step="0.1" min="0" value="0.5" />
+            <input id="price" type="number" step="0.05" min="0" value="0.5" />
           </div>
           <div>
             <label for="budget">Auto-haggle up to (ℏ)</label>
@@ -308,12 +335,7 @@
             <button id="run">Send offer</button>
           </div>
         </div>
-        <!-- The health request the policy gate exists to refuse: tick, send,
-             and watch the seller decline with the reason in the log. -->
-        <label style="display: flex; gap: 6px; align-items: center; font-weight: normal">
-          <input id="request-health" type="checkbox" />
-          also request cycle-tracking data (health bucket)
-        </label>
+        <p class="hint" id="quote-hint"></p>
         <p class="status" id="run-status"></p>
         <div class="log" id="log">
           <p class="empty">Nothing yet — send an offer to watch the two agents negotiate.</p>
@@ -324,7 +346,7 @@
     <script type="module">
       const $ = (id) => document.getElementById(id);
 
-      const state = { entries: [] };
+      const state = { entries: [], tracks: [] };
 
       function time() {
         return new Date().toLocaleTimeString([], { hour12: false });
@@ -364,14 +386,57 @@
           const res = await fetch("/api/status");
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
-          $("seller-agent").textContent = `#${data.sellerAgentId}`;
-          $("buyer-agent").textContent = `#${data.buyerAgentId}`;
+          $("seller-agent").textContent = data.sellerLabel ?? "—";
+          $("seller-agent").title = data.sellerUaid ?? "";
+          $("buyer-agent").textContent = data.buyerLabel ?? "—";
+          $("buyer-agent").title = data.buyerUaid ?? "";
           if (data.policyStatement) $("policy").value = data.policyStatement;
           if (data.policy) $("policy-parsed").textContent = JSON.stringify(data.policy, null, 2);
         } catch (error) {
           $("policy-status").textContent = `Backend not reachable: ${error.message}`;
           $("policy-status").className = "status error";
         }
+      }
+
+      /** The catalogue drives the dropdown, so the demo can only bid on real tracks. */
+      async function loadCatalog() {
+        try {
+          const res = await fetch("/api/catalog");
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          state.tracks = data.tracks ?? [];
+
+          $("track").innerHTML = state.tracks
+            .map(
+              (t) =>
+                `<option value="${t.trackId}">${escapeHtml(t.title)} — ${escapeHtml(t.artist)} (${t.availableShares / 100}% left)</option>`,
+            )
+            .join("");
+          updateQuoteHint();
+        } catch (error) {
+          $("track").innerHTML = `<option value="">catalogue unavailable: ${escapeHtml(error.message)}</option>`;
+        }
+      }
+
+      /**
+       * Shows what the endpoint will charge for the selected licence, so the
+       * operator can see the price is per-licence rather than a flat fee — and
+       * whether the track even has that much capacity left.
+       */
+      function updateQuoteHint() {
+        const track = state.tracks.find((t) => String(t.trackId) === $("track").value);
+        const shares = Number($("shares").value);
+        if (!track || !Number.isFinite(shares) || shares <= 0) {
+          $("quote-hint").textContent = "";
+          return;
+        }
+        const quote = (track.basePricePerShareHbar * shares).toFixed(5).replace(/0+$/, "");
+        const overCapacity = shares > track.availableShares;
+        $("quote-hint").textContent =
+          `${shares} shares (${shares / 100}%) of "${track.title}" — the endpoint charges ${quote} ℏ` +
+          (overCapacity
+            ? ` · only ${track.availableShares / 100}% left, so this one is refused at the availability gate`
+            : "");
       }
 
       /** "2026-07-25 06:10:04" → "06:10" (the demo happens within one day). */
@@ -390,25 +455,26 @@
           $("stat-declined").textContent = data.declinedCount ?? 0;
 
           const body = $("sales-body");
-          if (!data.sales?.length) {
-            body.innerHTML = '<tr><td colspan="6" class="empty">No sales yet.</td></tr>';
+          if (!data.licences?.length) {
+            body.innerHTML = '<tr><td colspan="7" class="empty">No licences sold yet.</td></tr>';
           } else {
-            body.innerHTML = data.sales
+            body.innerHTML = data.licences
               .map(
-                (s) =>
-                  `<tr><td>${escapeHtml(shortTime(s.createdAt))}</td>` +
-                  `<td>#${escapeHtml(s.buyerAgentId)}</td>` +
-                  `<td>${escapeHtml(s.criteria)}</td>` +
-                  `<td>${escapeHtml(s.price)} ℏ</td>` +
+                (l) =>
+                  `<tr><td>${escapeHtml(shortTime(l.createdAt))}</td>` +
+                  `<td>${escapeHtml(l.buyerLabel)}</td>` +
+                  `<td class="track-cell">${escapeHtml(l.title)}<small>${escapeHtml(l.artist)}</small></td>` +
+                  `<td>${escapeHtml(l.summary)}</td>` +
+                  `<td>${escapeHtml(l.chargedHbar)} ℏ</td>` +
                   `<td>${
-                    s.hashscanUrl
-                      ? `<a href="${encodeURI(s.hashscanUrl)}" target="_blank" rel="noreferrer">HashScan ↗</a>`
+                    l.hashscanUrl
+                      ? `<a href="${encodeURI(l.hashscanUrl)}" target="_blank" rel="noreferrer">HashScan ↗</a>`
                       : "—"
                   }</td>` +
-                  // The NFT the buyer holds; sales from before receipts show —
+                  // The licence certificate NFT the buyer now holds.
                   `<td>${
-                    s.receiptUrl
-                      ? `<a href="${encodeURI(s.receiptUrl)}" target="_blank" rel="noreferrer">#${escapeHtml(s.receiptSerial)} ↗</a>`
+                    l.certificateUrl
+                      ? `<a href="${encodeURI(l.certificateUrl)}" target="_blank" rel="noreferrer">#${escapeHtml(l.certificateSerial)} ↗</a>`
                       : "—"
                   }</td></tr>`,
               )
@@ -417,9 +483,9 @@
 
           // Refusals are worth showing: they are the policy doing its job.
           const declines = $("declines");
-          declines.textContent = data.declines?.length
-            ? `Refused on your behalf: ${data.declines
-                .map((d) => `${d.criteria} at ${d.price} ℏ (${d.reason})`)
+          declines.textContent = data.refusals?.length
+            ? `Refused on your behalf: ${data.refusals
+                .map((d) => `${d.title} — ${d.summary} at ${d.offeredHbar} ℏ (${d.reason})`)
                 .join(" · ")}`
             : "";
         } catch {
@@ -438,12 +504,12 @@
         const button = $("save-policy");
 
         if (!statement) {
-          setStatus("Describe what you are willing to sell first.", true);
+          setStatus("Describe what you are willing to license first.", true);
           return;
         }
 
         button.disabled = true;
-        setStatus("Interpreting your policy…");
+        setStatus("Interpreting your terms…");
 
         try {
           const res = await fetch("/api/policy", {
@@ -456,18 +522,25 @@
           if (!res.ok) {
             // The previous policy stays in force — say so, so nobody assumes
             // the agent is now unconstrained.
-            setStatus(`${data.error} Your previous policy is still in force.`, true);
+            setStatus(`${data.error} Your previous terms are still in force.`, true);
             return;
           }
 
           $("policy-parsed").textContent = JSON.stringify(data.policy, null, 2);
-          const allowed = data.policy.allowedCategories;
+          const p = data.policy;
+          const types = p.allowedLicenceTypes ?? [];
           setStatus(
-            allowed.length
-              ? `Saved — your agent will sell ${allowed.join(" and ")} data at ${data.policy.minPrice} ℏ or more, and refuse everything else.`
-              : "Saved — your agent will not sell anything.",
+            types.length
+              ? `Saved — your agent will grant ${types.join(" and ")} licences at ${p.minPricePerShareHbar} ℏ per share or more, ` +
+                `up to ${p.maxSharesPerLicence / 100}% per licence, and refuse everything else.`
+              : "Saved — your agent will not license anything.",
           );
-          addEntry("policy", `updated: ${allowed.join(", ") || "nothing permitted"}, min ${data.policy.minPrice} ℏ`);
+          addEntry(
+            "terms",
+            `updated: ${types.join(", ") || "nothing permitted"}, min ${p.minPricePerShareHbar} ℏ/share, ` +
+              `cap ${p.maxSharesPerLicence / 100}%` +
+              (p.forbiddenUseCases?.length ? `, never ${p.forbiddenUseCases.join("/")}` : ""),
+          );
         } catch (error) {
           setStatus(`Could not reach the backend: ${error.message}`, true);
         } finally {
@@ -523,12 +596,24 @@
         loadStatus();
       });
 
+      $("track").addEventListener("change", updateQuoteHint);
+      $("shares").addEventListener("input", updateQuoteHint);
+
       let stream = null;
 
       function runNegotiation() {
-        const category = $("category").value;
+        const trackId = $("track").value;
+        const shares = $("shares").value;
+        const licenceType = $("licence-type").value;
+        const useCase = $("use-case").value;
         const price = $("price").value;
         const button = $("run");
+
+        if (!trackId) {
+          $("run-status").className = "status error";
+          $("run-status").textContent = "Pick a track first — the catalogue has not loaded.";
+          return;
+        }
 
         if (stream) stream.close();
         state.entries = [];
@@ -538,13 +623,16 @@
         $("run-status").className = "status";
         $("run-status").textContent = "Negotiating…";
 
-        const health = $("request-health").checked ? "&dataTypes=cycleTracking" : "";
         // A budget switches the buyer to its own strategy: counter a price
         // refusal at the seller's stated floor, walk away from everything else.
         const budgetValue = $("budget").value;
         const budget = budgetValue ? `&budget=${encodeURIComponent(budgetValue)}` : "";
         stream = new EventSource(
-          `/api/negotiate?category=${encodeURIComponent(category)}&price=${encodeURIComponent(price)}${health}${budget}`,
+          `/api/negotiate?trackId=${encodeURIComponent(trackId)}` +
+            `&shares=${encodeURIComponent(shares)}` +
+            `&licenceType=${encodeURIComponent(licenceType)}` +
+            `&useCase=${encodeURIComponent(useCase)}` +
+            `&price=${encodeURIComponent(price)}${budget}`,
         );
 
         stream.onmessage = (event) => {
@@ -557,6 +645,8 @@
             stream.close();
             stream = null;
             loadEarnings();
+            // Capacity moves when a licence completes, so the dropdown is stale.
+            loadCatalog();
             // The chain has just been confirmed, so the topic has a new entry.
             loadAudit();
             return;
@@ -599,6 +689,7 @@
       $("run").addEventListener("click", runNegotiation);
 
       loadStatus();
+      loadCatalog();
       loadEarnings();
       loadAudit();
     </script>
