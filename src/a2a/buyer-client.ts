@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Role, type Message, type Part, type SendMessageResult } from "@a2a-js/sdk";
 import { ClientFactory } from "@a2a-js/sdk/client";
 import { getBuyerAgentId } from "../erc8004/agent-ids.js";
+import { payAndFetch, type PayAndFetchResult } from "../x402/pay.js";
 import { SELLER_AGENT_URL } from "./seller-agent-card.js";
 
 /**
@@ -26,11 +27,26 @@ export interface DataCriteria {
   cohortSize?: number;
 }
 
+/** The paid endpoint the seller routes an accepted offer to (Phase 7.1). */
+export interface PaymentInstruction {
+  url: string;
+  method: string;
+  priceHbar: string;
+  priceTinybar: string;
+  asset: string;
+  network: string;
+  scheme: string;
+}
+
 export interface NegotiationResponse {
   /** `"accept"` or `"decline"` as reported by the seller, when it said. */
   decision?: string;
+  /** Why the seller declined, when it did. */
+  reason?: string;
   /** The seller's reply in plain text. */
   reply: string;
+  /** Where and what to pay — present only when the offer was accepted. */
+  payment?: PaymentInstruction;
   /** Untouched result, for callers that need the task/message details. */
   raw: SendMessageResult;
 }
@@ -80,6 +96,10 @@ function extractDecision(result: SendMessageResult): string | undefined {
   return typeof decision === "string" ? decision : undefined;
 }
 
+function extractMetadata(result: SendMessageResult): Record<string, unknown> {
+  return responseMessage(result)?.metadata ?? {};
+}
+
 /**
  * Sends arbitrary text to the seller agent.
  *
@@ -116,7 +136,16 @@ export async function sendNegotiationMessage(
     metadata: undefined,
   });
 
-  return { decision: extractDecision(raw), reply: extractReply(raw), raw };
+  const replyMetadata = extractMetadata(raw);
+
+  return {
+    decision: extractDecision(raw),
+    reason:
+      typeof replyMetadata["reason"] === "string" ? replyMetadata["reason"] : undefined,
+    reply: extractReply(raw),
+    payment: replyMetadata["payment"] as PaymentInstruction | undefined,
+    raw,
+  };
 }
 
 /**
@@ -137,4 +166,52 @@ export async function sendNegotiationRequest(
     { offeredPriceHbar: offeredPrice, ...criteria },
     baseUrl,
   );
+}
+
+export interface PurchaseResult {
+  negotiation: NegotiationResponse;
+  /** Present only when the seller accepted and the payment went through. */
+  purchase?: PayAndFetchResult;
+}
+
+/**
+ * Negotiates and, if the seller accepts, pays — end to end, unattended.
+ *
+ * This is the behaviour the whole project is about: the buyer agent reads the
+ * endpoint and price off the acceptance, settles a real Hedera payment, and
+ * collects the data, with no human approving the transaction. A decline simply
+ * comes back with its reason and nothing is paid.
+ */
+export async function negotiateAndPurchase(
+  criteria: DataCriteria,
+  offeredPrice: number,
+  options: { baseUrl?: string; onStep?: (message: string) => void } = {},
+): Promise<PurchaseResult> {
+  const log = options.onStep ?? (() => {});
+
+  const negotiation = await sendNegotiationRequest(
+    criteria,
+    offeredPrice,
+    options.baseUrl ?? SELLER_BASE_URL,
+  );
+  log(`negotiation: ${negotiation.decision}${negotiation.reason ? ` (${negotiation.reason})` : ""}`);
+
+  if (negotiation.decision !== "accept") {
+    return { negotiation };
+  }
+
+  if (!negotiation.payment?.url) {
+    throw new Error(
+      "Seller accepted but returned no payment instruction — cannot pay without an endpoint.",
+    );
+  }
+
+  // Pay no more than the seller quoted during the negotiation: the endpoint is
+  // asked again for its price, and a higher one is refused rather than signed.
+  const purchase = await payAndFetch(negotiation.payment.url, {
+    maxAmountTinybar: negotiation.payment.priceTinybar,
+    onStep: log,
+  });
+
+  return { negotiation, purchase };
 }

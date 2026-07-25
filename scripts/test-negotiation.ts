@@ -47,20 +47,28 @@ async function main(): Promise<void> {
 
   const results: boolean[] = [];
 
-  // Scenario 1 — a complete offer: category, cohort and a price in HBAR.
+  // Scenario 1 — a complete offer the owner's policy permits. No age filter:
+  // an age range *and* an activity together match a single person in the
+  // seeded population, which the aggregator refuses to report on.
   results.push(
     report(
       "accept: priced offer for a running-performance cohort",
       "accept",
-      await sendNegotiationRequest(
-        { category: "running performance", ageRange: "25-34", cohortSize: 400 },
-        0.5,
-      ),
+      await sendNegotiationRequest({ category: "running performance" }, 0.5),
     ),
   );
 
-  // Scenario 2 — an enquiry with no price attached, which the seller should
-  // turn down and ask to have completed.
+  // Scenario 2 — a well-formed, generously priced offer for a category the
+  // owner did not permit. Money does not override the policy.
+  results.push(
+    report(
+      "reject: category the policy does not allow, at double the price",
+      "decline",
+      await sendNegotiationRequest({ category: "swimming" }, 0.9),
+    ),
+  );
+
+  // Scenario 3 — an enquiry with no offer attached.
   results.push(
     report(
       "reject: enquiry with no price attached",

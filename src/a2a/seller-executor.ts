@@ -7,25 +7,107 @@ import {
   type ExecutionEventBus,
   type RequestContext,
 } from "@a2a-js/sdk/server";
+import {
+  CohortTooSmallError,
+  getCohortInsight,
+  MIN_COHORT_SIZE,
+} from "../data/aggregate.js";
 import { getApprovedAgentIds } from "../erc8004/agent-ids.js";
 import { identityRegistry } from "../erc8004/contracts.js";
 import { fromDataUri } from "../erc8004/registration-files.js";
+import { parsePolicy, type DataPolicy } from "../policy/parser.js";
+import {
+  COHORT_INSIGHT_PATH,
+  COHORT_INSIGHT_PRICE_HBAR,
+  COHORT_INSIGHT_PRICE_TINYBAR,
+  HBAR_ASSET_ID,
+  NETWORK,
+  X402_BASE_URL,
+} from "../x402/config.js";
 
 /**
  * The seller agent's negotiation logic.
  *
- * This is the skeleton version: the decision is a keyword check, standing in
- * for the real chain of ERC-8004 identity verification (Phase 5.4) and the
- * owner's natural-language policy (Phase 6.5). Everything around the decision —
- * how the offer is read off the A2A message and how the reply is published — is
- * already the real thing, so those later phases only replace `decideOnOffer`.
+ * An offer passes through three gates in order, and each one can only ever
+ * narrow what happens next: is the buyer who they say they are (ERC-8004), does
+ * the owner's policy permit this sale, and can the cohort be reported without
+ * exposing an individual. No human is involved in any of them.
  */
 
 export type NegotiationDecision = "accept" | "decline";
 
+/** Why an offer was turned down, for the reply and the audit trail. */
+export type DeclineReason =
+  | "identity_unverified"
+  | "offer_incomplete"
+  | "category_mismatch"
+  | "price_too_low"
+  | "cohort_too_small";
+
+/**
+ * Everything the buyer agent needs to pay and collect, sent with an
+ * acceptance. It can act on this without a human reading the reply.
+ */
+export interface PaymentInstruction {
+  /** x402-protected URL, with the agreed cohort criteria already applied. */
+  url: string;
+  method: "GET";
+  /** What the endpoint will charge, in HBAR. */
+  priceHbar: string;
+  /** The same amount in tinybar, which is what actually gets signed. */
+  priceTinybar: string;
+  /** Native HBAR (`0.0.0`). */
+  asset: string;
+  network: string;
+  scheme: "exact";
+}
+
 export interface NegotiationResult {
   decision: NegotiationDecision;
   reply: string;
+  reason?: DeclineReason;
+  /** Size of the cohort the buyer would receive, when the offer is accepted. */
+  cohortSize?: number;
+  /** Present only on an acceptance. */
+  payment?: PaymentInstruction;
+}
+
+/** What the buyer is asking for, read off the A2A message metadata. */
+export interface Offer {
+  category?: string;
+  priceHbar?: number;
+  ageRange?: string;
+}
+
+/**
+ * The owner's policy, as typed in plain language.
+ *
+ * Overridable with `POLICY_STATEMENT` so a demo can change the rules without a
+ * code change; Phase 8.2's form calls {@link setPolicy} instead.
+ */
+export const DEFAULT_POLICY_STATEMENT =
+  process.env.POLICY_STATEMENT ??
+  "You can sell aggregated statistics from my running and cycling data — performance scores and " +
+    "session counts only — to verified research companies, minimum 0.4 HBAR per query. " +
+    "Never share my heart rate, and never any health or medication data.";
+
+let cachedPolicy: DataPolicy | null = null;
+
+/**
+ * Returns the active policy, parsing the statement once.
+ *
+ * Parsing per negotiation would put an LLM call on the critical path of every
+ * offer and risk the answer drifting between them; the owner set the policy
+ * once, so it is interpreted once.
+ */
+export async function getPolicy(): Promise<DataPolicy> {
+  cachedPolicy ??= await parsePolicy(DEFAULT_POLICY_STATEMENT);
+  return cachedPolicy;
+}
+
+/** Replaces the active policy — used by the frontend and by tests. */
+export function setPolicy(policy: DataPolicy | null): void {
+  cachedPolicy = policy;
 }
 
 /**
@@ -50,26 +132,101 @@ export function extractText(message: Message): string {
 }
 
 /**
- * Placeholder policy: an offer that names a price is worth continuing with,
- * anything else gets asked for one.
+ * Builds the paid-endpoint instruction for an accepted offer.
+ *
+ * The criteria are baked into the URL by the seller rather than left to the
+ * buyer, so the request that gets paid for is the one that was negotiated.
  */
-export function decideOnOffer(offerText: string): NegotiationResult {
-  const mentionsPrice = offerText.toLowerCase().includes("price");
+export function buildPaymentInstruction(
+  activityType: string,
+  ageRange?: string,
+): PaymentInstruction {
+  const params = new URLSearchParams({ activityType });
+  if (ageRange) params.set("ageRange", ageRange);
 
-  if (mentionsPrice) {
+  return {
+    url: `${X402_BASE_URL}${COHORT_INSIGHT_PATH}?${params}`,
+    method: "GET",
+    priceHbar: COHORT_INSIGHT_PRICE_HBAR,
+    priceTinybar: COHORT_INSIGHT_PRICE_TINYBAR,
+    asset: HBAR_ASSET_ID,
+    network: NETWORK,
+    scheme: "exact",
+  };
+}
+
+/** Reads the offer out of the message metadata the buyer client attaches. */
+export function extractOffer(message: Message): Offer {
+  const metadata = message.metadata ?? {};
+  const price = metadata["offeredPriceHbar"];
+  const category = metadata["category"];
+  const ageRange = metadata["ageRange"];
+
+  return {
+    category: typeof category === "string" ? category : undefined,
+    priceHbar: typeof price === "number" ? price : Number(price) || undefined,
+    ageRange: typeof ageRange === "string" ? ageRange : undefined,
+  };
+}
+
+/**
+ * Matches a buyer's wording against a permitted category.
+ *
+ * Buyers describe what they want in their own terms ("running performance"),
+ * so an exact string match would reject offers the policy actually allows.
+ */
+function matchCategory(requested: string, allowed: string[]): string | undefined {
+  const needle = requested.trim().toLowerCase();
+  return allowed.find(
+    (category) => needle === category || needle.includes(category.toLowerCase()),
+  );
+}
+
+/**
+ * Decides an offer against the owner's policy.
+ *
+ * Pure and synchronous, so the rules can be tested without a network: the
+ * cohort-availability check happens separately in `execute`.
+ */
+export function evaluateOffer(offer: Offer, policy: DataPolicy): NegotiationResult {
+  if (!offer.category || offer.priceHbar === undefined || Number.isNaN(offer.priceHbar)) {
     return {
-      decision: "accept",
+      decision: "decline",
+      reason: "offer_incomplete",
       reply:
-        "Offer accepted. The cohort aggregate is available from the paid endpoint; " +
-        "settle the x402 payment and the data will be released. Raw records stay in the owner's encrypted store.",
+        "Your offer is incomplete. Send the data category and the price in HBAR you are offering, " +
+        "and I will evaluate it against the data owner's policy.",
+    };
+  }
+
+  const matched = matchCategory(offer.category, policy.allowedCategories);
+  if (!matched) {
+    return {
+      decision: "decline",
+      reason: "category_mismatch",
+      reply:
+        `Category mismatch — the owner's policy does not permit selling "${offer.category}" data. ` +
+        `Permitted: ${policy.allowedCategories.join(", ") || "nothing at present"}. ` +
+        "This is not a matter of price.",
+    };
+  }
+
+  if (offer.priceHbar < policy.minPrice) {
+    return {
+      decision: "decline",
+      reason: "price_too_low",
+      reply:
+        `Price too low — you offered ${offer.priceHbar} HBAR and the owner's minimum is ${policy.minPrice} HBAR ` +
+        `for ${matched} data. Raise the offer and I will reconsider.`,
     };
   }
 
   return {
-    decision: "decline",
+    decision: "accept",
     reply:
-      "No price found in your offer. Send the category, cohort size and the price in HBAR you are offering, " +
-      "and I will evaluate it against the data owner's policy.",
+      `Offer accepted for ${matched} data at ${offer.priceHbar} HBAR. ` +
+      "The cohort aggregate is available from the paid endpoint; settle the x402 payment and it will be released. " +
+      "Raw records stay in the owner's encrypted store.",
   };
 }
 
@@ -152,14 +309,14 @@ export class SellerExecutor implements AgentExecutor {
     requestContext: RequestContext,
     eventBus: ExecutionEventBus,
   ): Promise<void> {
-    const offerText = extractText(requestContext.userMessage);
     const buyerAgentId = requestContext.userMessage.metadata?.["buyerAgentId"];
 
-    // Identity first: an unidentified or unverified buyer never reaches the
+    // Gate 1 — identity. An unidentified or unverified buyer never reaches the
     // policy, so no offer from one can be accepted.
     if (typeof buyerAgentId !== "string" && typeof buyerAgentId !== "number") {
       this.publishReply(requestContext, eventBus, {
         decision: "decline",
+        reason: "identity_unverified",
         reply:
           "Identify yourself before making an offer: include your ERC-8004 agentId as `buyerAgentId` " +
           "in the message metadata so I can verify you against the IdentityRegistry.",
@@ -174,6 +331,7 @@ export class SellerExecutor implements AgentExecutor {
         eventBus,
         {
           decision: "decline",
+          reason: "identity_unverified",
           reply: `Identity check failed — ${identity.reason}. I only negotiate with verified agents.`,
         },
         identity,
@@ -181,9 +339,65 @@ export class SellerExecutor implements AgentExecutor {
       return;
     }
 
-    const { decision, reply } = decideOnOffer(offerText);
+    // Gate 2 — the owner's policy.
+    const offer = extractOffer(requestContext.userMessage);
+    const verdict = evaluateOffer(offer, await getPolicy());
+    if (verdict.decision === "decline") {
+      this.publishReply(requestContext, eventBus, verdict, identity);
+      return;
+    }
 
-    this.publishReply(requestContext, eventBus, { decision, reply }, identity);
+    // Gate 3 — can this cohort actually be reported? Checking here, before the
+    // buyer is routed to the paid endpoint, is what stops them paying for a
+    // request the aggregator would refuse.
+    const activityType = matchCategory(
+      offer.category!,
+      (await getPolicy()).allowedCategories,
+    )!;
+
+    let cohortSize: number;
+    try {
+      const insight = await getCohortInsight({
+        activityType,
+        ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),
+      });
+      cohortSize = insight.participantCount;
+    } catch (error) {
+      if (error instanceof CohortTooSmallError) {
+        this.publishReply(
+          requestContext,
+          eventBus,
+          {
+            decision: "decline",
+            reason: "cohort_too_small",
+            reply:
+              `Your criteria match only ${error.matched} of the owner's records, below the minimum of ` +
+              `${MIN_COHORT_SIZE} needed to report an aggregate without exposing an individual. ` +
+              "Broaden the criteria and I will reconsider — you have not been charged.",
+          },
+          identity,
+        );
+        return;
+      }
+      throw error;
+    }
+
+    const payment = buildPaymentInstruction(activityType, offer.ageRange);
+
+    this.publishReply(
+      requestContext,
+      eventBus,
+      {
+        ...verdict,
+        cohortSize,
+        payment,
+        reply:
+          `${verdict.reply} Cohort: ${cohortSize} participants. ` +
+          `Pay ${payment.priceHbar} HBAR (${payment.priceTinybar} tinybar, asset ${payment.asset}) ` +
+          `on ${payment.network} and ${payment.method} ${payment.url} — the same request returns the aggregate once settled.`,
+      },
+      identity,
+    );
   }
 
   /** Publishes one reply and closes the exchange. */
@@ -203,6 +417,10 @@ export class SellerExecutor implements AgentExecutor {
       // and the identity result is what the audit trail records.
       metadata: {
         decision: result.decision,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.cohortSize !== undefined ? { cohortSize: result.cohortSize } : {}),
+        // The buyer agent pays straight from this, without reading the prose.
+        ...(result.payment ? { payment: result.payment } : {}),
         identityVerified: identity?.verified ?? false,
         identityReason: identity?.reason ?? "no identity supplied",
       },

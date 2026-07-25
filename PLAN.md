@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 6 — Off-chain Data + Policy Engine (6.1-6.3 done). Next: 6.4 — natural-language policy parser.
+**Active phase:** Phase 7 — Full Integration (7.1-7.2 done). Next: 7.3 — post-payment audit log + reputation.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -61,12 +61,12 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 6.1 Encrypted database schema
 - [x] 6.2 Mock user data
 - [x] 6.3 Cohort aggregation function
-- [ ] 6.4 Natural-language policy parser
-- [ ] 6.5 Policy wired into seller executor
+- [x] 6.4 Natural-language policy parser
+- [x] 6.5 Policy wired into seller executor
 
 ### Phase 7 — Full Integration
-- [ ] 7.1 Accept → x402 routing
-- [ ] 7.2 Buyer agent autonomous payment trigger
+- [x] 7.1 Accept → x402 routing
+- [x] 7.2 Buyer agent autonomous payment trigger
 - [ ] 7.3 Post-payment audit log + reputation chain
 - [ ] 7.4 Full end-to-end test script
 - [ ] 7.5 Error handling and edge cases
@@ -104,6 +104,52 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (29)
+**Completed:** Phase 7.2 — **the buyer agent now negotiates and pays end to end with no human and no hardcoded endpoint**
+**Files changed:** `src/x402/pay.ts` (**new**) — the four-step x402 round trip lifted out of `scripts/x402-buy.ts` into `payAndFetch(url, {maxAmountTinybar, onStep})`, returning `{status, data, settlement, quoted}` with a HashScan link. `src/a2a/buyer-client.ts` — `NegotiationResponse` now exposes `reason` and `payment`; new `negotiateAndPurchase(criteria, price, {onStep})` negotiates and, **only on an acceptance**, pays the URL the seller returned. `scripts/x402-buy.ts` — rewritten to call the shared module instead of carrying its own copy (141 → 44 lines).
+**Verification:** `npx tsc --noEmit` clean. **6/6** with both servers live: an accepted offer ran negotiation → 402 → sign → 200 unattended, returning `{"participantCount":3,"avgSessionCount":5.3,"avgPerformanceScore":64.3,"trend":"down"}` and settling tx `0.0.7162784@1784955929.489635567` (`success=true`, payer `0.0.9697053`); a **declined** offer (swimming @ 0.9 ℏ, `category_mismatch`) triggered **no payment at all**. The overpayment guard was tested separately: capping at 10,000,000 tinybar against a 50,000,000 quote → *"refusing to pay"*, thrown **before** anything was signed. `scripts/x402-buy.ts` still works standalone after the rewrite (settled `0.0.7162784@1784955965.462487579`).
+**What the next person should do:** Phase 7.3 — after a successful purchase, write the HCS audit entry and submit ERC-8004 feedback. `payAndFetch` already returns `settlement.transaction`, which is exactly the proof-of-payment string `submitFeedback()` expects.
+**Known issues / things to watch for:**
+- **`payAndFetch` re-reads the price from the 402 and refuses to sign anything above `maxAmountTinybar`.** `negotiateAndPurchase` passes the price the seller quoted during the negotiation, so a server that raises its price between accepting and charging gets nothing. Without this an "autonomous" agent would sign whatever it was handed.
+- The buyer never constructs the endpoint URL — it uses `negotiation.payment.url`, criteria included. If the seller stops returning a payment instruction, the buyer throws rather than guessing a URL.
+- Each successful run costs a real **0.5 ℏ** on testnet. Buyer balance is drifting down (~997 ℏ); plenty left, but full end-to-end runs are not free.
+- The 0.4 ℏ policy minimum vs the fixed 0.5 ℏ route price (session 28) is still unresolved. `maxAmountTinybar` now makes the mismatch *fail loudly* if an offer below the route price is ever accepted, instead of silently overcharging.
+
+### 2026-07-25 — Emre — Claude Code session (28)
+**Completed:** Phase 7.1
+**Files changed:** `src/x402/config.ts` (**new**) — `X402_BASE_URL`, `COHORT_INSIGHT_PATH`, the HBAR/tinybar prices, `HBAR_ASSET_ID`, `NETWORK`, extracted out of `server.ts`. `src/x402/server.ts` — imports them and re-exports for compatibility. `src/a2a/seller-executor.ts` — new `PaymentInstruction` type and `buildPaymentInstruction(activityType, ageRange?)`; an acceptance now carries `payment` in the reply metadata **and** spells the same thing out in the prose.
+**Why a new config module:** `src/x402/server.ts` calls `app.listen(...)` at module scope, so importing it from the executor to read the price would have started a second x402 server as an import side effect.
+**Verification:** `npx tsc --noEmit` clean. **9/9** over live A2A: an accepted offer returns `{url:"http://localhost:4021/data/cohort-insight?activityType=running", method:"GET", priceHbar:"0.5", priceTinybar:"50000000", asset:"0.0.0", network:"hedera:testnet", scheme:"exact"}` with `cohortSize=3`; a declined offer carries **no** payment instruction. Then the decisive check — took the URL the seller handed back, unpaid → **402**, and `scripts/x402-buy.ts` against it → **200** with `{"participantCount":3,"avgSessionCount":5.3,"avgPerformanceScore":64.3,"trend":"down"}`, settlement `success=true`, tx `0.0.7162784@1784955670.930044735`.
+**What the next person should do:** Phase 7.2 — have the buyer agent read `metadata.payment` off the acceptance and pay it **without a hardcoded URL**. `scripts/x402-buy.ts` still has the endpoint baked in; 7.2 should drive it from the negotiation result.
+**Known issues / things to watch for:**
+- **The negotiated price and the charged price are two different numbers.** The policy accepts anything ≥ `minPrice` (0.4 ℏ), but the x402 route has a fixed price of **0.5 ℏ** — so an accepted 0.4 ℏ offer would be billed 0.5 ℏ. The instruction states the real charge, so nothing is hidden, but making the route price per-negotiation is unfinished business. Keep the demo offer at 0.5 ℏ and it does not surface.
+- The seller builds the URL **including the criteria**, so the buyer pays for the cohort that was actually negotiated rather than substituting its own filter afterwards.
+- `X402_BASE_URL` is overridable by env but defaults to `http://localhost:4021`; the seller agent hands out that literal URL, so it only works for a buyer on the same machine.
+
+### 2026-07-25 — Emre — Claude Code session (27)
+**Completed:** Phase 6.5 — **Phase 6 is done**
+**Files changed:** `src/a2a/seller-executor.ts` — `decideOnOffer` (keyword placeholder) **replaced** by `evaluateOffer(offer, policy)` plus `extractOffer(message)`; `execute()` now runs three gates in order — identity → policy → cohort availability. Added `getPolicy()` (parses `DEFAULT_POLICY_STATEMENT` once and caches), `setPolicy()` for the frontend/tests, and a `DeclineReason` union (`identity_unverified | offer_incomplete | category_mismatch | price_too_low | cohort_too_small`) echoed in the reply metadata alongside `cohortSize`. `scripts/test-negotiation.ts` — scenarios updated (see below).
+**Verification:** `npx tsc --noEmit` clean. **8/8** pure unit checks on `evaluateOffer` (no network): running @0.5 → accept; "running performance" → accept (buyer's own wording matched to `running`); cycling @ exactly 0.4 → accept; @0.15 → `price_too_low`; swimming @0.9 and strength @2.0 → `category_mismatch`; missing price or category → `offer_incomplete`. Then **4/4 end-to-end over A2A** with the policy parsed live from the demo sentence by Groq — accept carried `cohortSize=3` and `identityVerified=true`; all three declines carried the right reason. `scripts/test-negotiation.ts` now passes **3/3**.
+**What the next person should do:** Phase 7.1 — accept → x402 routing. The seller already knows the cohort is reportable before it routes, so the buyer cannot be sent to an endpoint that would 422.
+**Known issues / things to watch for:**
+- **Gate 3 caused a real regression that is now fixed.** `scripts/test-negotiation.ts` was asking for `running` + age `25-34`, which matches **0** of the 12 seeded users, so the accept scenario started declining with `cohort_too_small`. The scenario now omits the age filter — same reason `scripts/x402-buy.ts` was widened in session 25. Any narrow age × activity query will keep failing until `USER_COUNT` is raised.
+- The old "reject: enquiry with no price" case was **upgraded** to a *priced* rejection (swimming @ 0.9 ℏ → `category_mismatch`), which is the stronger demo: the buyer offers more than double the minimum and is still refused because the policy does not permit that category. The no-price case is kept as a third scenario.
+- Buyers describe categories in their own words, so `matchCategory` does a substring match ("running performance" → `running`). It is deliberately permissive; a category that is *not* permitted still never matches.
+- The policy is parsed **once per process** and cached. Restart the seller server after changing `POLICY_STATEMENT`, or call `setPolicy(null)` to force a re-parse.
+- `minPrice` is compared in **HBAR** against `offeredPriceHbar` from the message metadata — no tinybar conversion happens on this path. Keep that in mind in 7.1, where the x402 layer prices in tinybar.
+
+### 2026-07-25 — Emre — Claude Code session (26)
+**Completed:** Phase 6.4
+**Files changed:** `src/policy/parser.ts` (new) — `parsePolicy(input)` sends the owner's sentence to `ChatGroq` (`llama-3.3-70b-versatile`, `temperature: 0`) via `withStructuredOutput(policySchema)` and returns `{ allowedCategories, minPrice, allowedDataTypes }`, validated by Zod. Exports `policySchema`, `DataPolicy`, `KNOWN_CATEGORIES`, `KNOWN_DATA_TYPES`. `package.json` — `zod@3.25.76` promoted to a **direct** dependency (it was only present transitively via LangChain).
+**Verification:** `npx tsc --noEmit` clean. Six real Groq calls, all passing: "running and cycling … at least 0.4 HBAR, but never my heart rate" → `{allowedCategories:["running","cycling"], minPrice:0.4, allowedDataTypes:[…no heartRate]}`; "anything about my swimming, minimum 1 HBAR" → swimming/1; "only strength … only the session counts … nothing under 0.25" → `{["strength"],0.25,["sessionCount"]}`; **"Don't sell any of my data"** → `{[],0,[]}`; the same input parsed twice gave byte-identical output (temperature 0); empty input rejected before any API call. Separately, three adversarial inputs: "yoga, pilates and rock climbing" → `allowedCategories: []`, and **"medication adherence and menstrual cycle data" → `[]`** (out-of-scope health data cannot enter the policy even when the owner asks for it); "sell everything" correctly expands to all four categories.
+**What the next person should do:** Phase 6.5 — replace `decideOnOffer` in `src/a2a/seller-executor.ts` with a real policy check (category in `allowedCategories`, offered price ≥ `minPrice`), keeping the identity gate ahead of it.
+**Known issues / things to watch for:**
+- **The LLM's output is filtered, not trusted.** `keepKnown()` drops any category or data type outside the known vocabularies before the final `policySchema.parse()`. Without it a hallucinated category would silently widen what the agent is willing to sell — this is what makes the medication/menstrual case come back empty rather than being honoured.
+- `temperature: 0` is deliberate: a policy the owner set once must parse the same way every time, not be resampled per negotiation.
+- The parser is **one small call with no tools attached**, so it stays well inside the Groq free tier (12k tokens/min) — unlike passing the Agent Kit toolkit, which costs ~54k tokens (session 10).
+- `minPrice` is in **HBAR**, not tinybar. The x402 layer prices in tinybar (`COHORT_INSIGHT_PRICE_TINYBAR`); convert at the boundary in 6.5/7.1 or the comparison will be off by 10^8.
+- Nothing persists the policy yet — 6.5 decides whether it is parsed once at startup or stored per user.
 
 ### 2026-07-25 — Emre — Claude Code session (25)
 **Completed:** Phase 6.3 — **the mock data provider is gone; the paid endpoint now serves real aggregates over the encrypted store**

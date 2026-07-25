@@ -1,11 +1,17 @@
 import "dotenv/config";
 import express from "express";
-import { Hbar } from "@hiero-ledger/sdk";
 import { paymentMiddleware } from "@x402/express";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import type { RoutesConfig } from "@x402/core/server";
-import type { Network } from "@x402/core/types";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
+import {
+  COHORT_INSIGHT_PATH,
+  COHORT_INSIGHT_PRICE_HBAR,
+  COHORT_INSIGHT_PRICE_TINYBAR,
+  HBAR_ASSET_ID,
+  NETWORK,
+  X402_PORT,
+} from "./config.js";
 import {
   CohortTooSmallError,
   getCohortInsight,
@@ -27,20 +33,15 @@ import {
  * Structure follows matevszm/x402-hedera-example (Hono there, Express here).
  */
 
-export const PORT = 4021;
-
-/** Price of one cohort insight. Advertised in HBAR, charged in tinybars. */
-export const COHORT_INSIGHT_PRICE_HBAR = "0.5";
-export const COHORT_INSIGHT_PRICE_TINYBAR = Hbar.fromString(
+export {
+  COHORT_INSIGHT_PATH,
   COHORT_INSIGHT_PRICE_HBAR,
-).toTinybars().toString();
+  COHORT_INSIGHT_PRICE_TINYBAR,
+  HBAR_ASSET_ID,
+  NETWORK,
+} from "./config.js";
 
-/** Native HBAR. Hedera's own token has no contract address — it is asset 0.0.0. */
-const HBAR_ASSET_ID = "0.0.0";
-
-const NETWORK: Network = "hedera:testnet";
-
-const COHORT_INSIGHT_PATH = "/data/cohort-insight";
+export const PORT = X402_PORT;
 
 function requireEnv(name: string): string {
   const value = process.env[name];
