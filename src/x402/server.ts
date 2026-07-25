@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { fileURLToPath } from "node:url";
-import express, { type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import { paymentMiddleware } from "@x402/express";
 import { decodePaymentResponseHeader } from "@x402/core/http";
 import { recordCompletedSale } from "../a2a/seller-executor.js";
@@ -19,7 +19,9 @@ import {
   CohortTooSmallError,
   getCohortInsight,
   parseCriteria,
+  type CohortCriteria,
 } from "../data/aggregate.js";
+import { openDatabase, type QueryRow } from "../data/db.js";
 
 /**
  * The seller's data server — the endpoint a buyer agent is routed to once a
@@ -108,6 +110,104 @@ app.get("/catalog", (_req, res) => {
   });
 });
 
+/**
+ * Compares what the buyer is asking for against what was actually negotiated.
+ *
+ * Both directions matter: adding a filter narrows the cohort below what the
+ * seller agreed to report on, and dropping one broadens it. Absent must equal
+ * absent, so an omitted `ageRange` cannot silently become "any age".
+ */
+export function matchesNegotiatedCriteria(
+  negotiated: CohortCriteria,
+  requested: CohortCriteria,
+): boolean {
+  return (
+    negotiated.activityType === requested.activityType &&
+    negotiated.ageRange === requested.ageRange
+  );
+}
+
+/**
+ * Refuses any paid request that no negotiation authorised.
+ *
+ * Without this the three gates in the seller's agent are decorative: the policy
+ * is applied during the A2A conversation, but the endpoint itself would sell a
+ * forbidden category to anyone holding the price. A request has to name the
+ * negotiation it belongs to, that negotiation has to be open, and the criteria
+ * have to be the ones that were agreed — otherwise the request is refused
+ * *before* the payment middleware, so no price is ever quoted for it.
+ */
+function requireAcceptedNegotiation(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const queryId = Number(req.query["queryId"]);
+
+  if (!Number.isInteger(queryId) || queryId <= 0) {
+    res.status(403).json({
+      error: "negotiation_required",
+      message:
+        "This endpoint only serves requests an agent negotiated for. Open a negotiation with the " +
+        "seller agent first; the acceptance carries the URL to pay, queryId included.",
+    });
+    return;
+  }
+
+  const db = openDatabase();
+  let negotiation: QueryRow | undefined;
+  try {
+    negotiation = db
+      .prepare("SELECT * FROM queries WHERE id = ?")
+      .get(queryId) as QueryRow | undefined;
+  } finally {
+    db.close();
+  }
+
+  if (!negotiation) {
+    res.status(403).json({
+      error: "unknown_negotiation",
+      message: `No negotiation ${queryId} exists.`,
+    });
+    return;
+  }
+
+  if (negotiation.status !== "accepted") {
+    // Covers a refused offer and, just as importantly, one already paid for:
+    // a settled negotiation cannot be replayed to collect the data twice.
+    res.status(403).json({
+      error: "negotiation_not_open",
+      message:
+        `Negotiation ${queryId} is "${negotiation.status}", not an open acceptance. ` +
+        "Each acceptance can be settled once.",
+    });
+    return;
+  }
+
+  // Deliberately does not echo the stored criteria back — a caller probing with
+  // guesses should not be told what the right answer was.
+  if (
+    !matchesNegotiatedCriteria(
+      parseCriteria(JSON.parse(negotiation.criteria) as Record<string, unknown>),
+      parseCriteria(req.query),
+    )
+  ) {
+    res.status(403).json({
+      error: "criteria_mismatch",
+      message:
+        `The criteria in this request are not the ones negotiation ${queryId} agreed on. ` +
+        "Request the cohort that was accepted, or negotiate again for a different one.",
+    });
+    return;
+  }
+
+  next();
+}
+
+// Ahead of the payment middleware on purpose: a request the seller never agreed
+// to must not even be quoted a price, let alone be able to pay it.
+app.get(COHORT_INSIGHT_PATH, requireAcceptedNegotiation);
+
 // Only paths present in `routes` are charged; everything else passes through.
 app.use(paymentMiddleware(routes, x402Server));
 
@@ -141,9 +241,11 @@ function scheduleCompletion(res: Response, queryId: number): void {
     recordCompletedSale(queryId, transactionId)
       .then((sale) => {
         console.log(
-          `[settle] query ${sale.queryId} completed — buyer ${sale.buyerAgentId}, ` +
-            `payment ${sale.transactionId}, HCS seq ${sale.auditSequenceNumber ?? "-"}, ` +
-            `feedback #${sale.feedbackIndex ?? "-"}`,
+          sale.alreadyCompleted
+            ? `[settle] query ${sale.queryId} was already completed — no second audit entry or feedback written`
+            : `[settle] query ${sale.queryId} completed — buyer ${sale.buyerAgentId}, ` +
+              `payment ${sale.transactionId}, HCS seq ${sale.auditSequenceNumber ?? "-"}, ` +
+              `feedback #${sale.feedbackIndex ?? "-"}`,
         );
         for (const problem of sale.errors) console.error(`[settle] ${problem}`);
       })
@@ -158,10 +260,9 @@ app.get(COHORT_INSIGHT_PATH, async (req, res) => {
   try {
     const insight = await getCohortInsight(parseCriteria(req.query));
 
-    const queryId = Number(req.query["queryId"]);
-    if (Number.isInteger(queryId) && queryId > 0) {
-      scheduleCompletion(res, queryId);
-    }
+    // `requireAcceptedNegotiation` has already established that this id names an
+    // open negotiation whose agreed criteria are the ones being requested.
+    scheduleCompletion(res, Number(req.query["queryId"]));
 
     res.json(insight);
   } catch (error) {

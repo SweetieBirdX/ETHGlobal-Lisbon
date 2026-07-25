@@ -8,6 +8,7 @@
     "build": "tsc",
     "test:e2e": "tsx scripts/full-e2e-test.ts",
     "test:errors": "tsx scripts/test-error-cases.ts",
+    "test:binding": "tsx scripts/test-payment-binding.ts",
     "web": "tsx src/web/server.ts",
     "dev": "tsx src/dev-server.ts"
   },

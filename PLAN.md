@@ -12,6 +12,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
+> **Out-of-phase fix, session 39:** the paid x402 endpoint now enforces the negotiation (it previously sold any cohort to anyone holding the price, bypassing the policy gate), and completing a sale is idempotent. See the session-39 handoff entry — it also lists the audit findings still open, including **`npm run test:e2e` currently failing 16/17**.
+
 ---
 
 ## Progress Checklist
@@ -104,6 +106,22 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (39)
+**Completed:** Not a numbered prompt — a **security fix found by auditing the whole repo**, plus its test.
+**Files changed:** `src/x402/server.ts` — new `requireAcceptedNegotiation` middleware registered **before** `paymentMiddleware`, and exported `matchesNegotiatedCriteria`; the route handler no longer re-validates `queryId`. `src/a2a/seller-executor.ts` — `recordCompletedSale` returns early with `alreadyCompleted: true` when the row is already `completed`; `CompletedSale` gained that field. `scripts/x402-buy.ts` — records its own `accepted` row before paying. `scripts/test-payment-binding.ts` (**new**). `package.json` — `npm run test:binding`. `README.md`.
+**The hole that was closed:** the three gates lived **only** in the A2A negotiation. The x402 route enforced nothing, so `GET /data/cohort-insight?activityType=swimming` — a category the owner's policy forbids — was quoted a price to anyone, with no negotiation and no `queryId`. Verified with `curl` before the fix (**402**) and after (**403 `negotiation_required`**). Paying 0.5 ℏ was enough to buy around the policy entirely.
+**The second hole:** `recordCompletedSale` had no completion guard, and **neither Hedera write is idempotent** — `giveFeedback` appends an entry every call. Settling the same `queryId` twice therefore rated the buyer twice for one payment, which is how a buyer would inflate its own ERC-8004 score.
+**Verification:** `npx tsc --noEmit` clean. `npm run test:binding` → **17/17**, one real purchase (`0.0.7162784@1784976447.328620144`, HCS seq 7→8, feedback 5→6). Part A: no `queryId` → 403 `negotiation_required`; unknown id → 403 `unknown_negotiation`; **a real open acceptance for running redirected at swimming → 403 `criteria_mismatch`**; an un-negotiated `ageRange` → 403 `criteria_mismatch`; and the seller's own untouched URL still reaches **402**, so the gate is not just refusing everything. Part C: replaying the settled URL → 403 `negotiation_not_open`; `recordCompletedSale` called directly again → `alreadyCompleted=true errors=0`, no audit entry and no feedback even attempted, `tx_hash` unchanged, and HCS sequence + feedback count both still 8 and 6 ten seconds later. Regressions: `npm run test:errors` still **17/17**; `scripts/x402-buy.ts` still settles standalone (`0.0.7162784@1784976609.083888649`).
+**What the next person should do:** Phase 9.2 — the bonus requirement coverage table. This fix is worth a row in it: the policy is now enforced at the point of payment, not only in conversation.
+**Known issues / things to watch for:**
+- **Supersedes the session-30 note "`queryId` travels in the payment URL and is trusted as-is."** It is now validated: the row must exist, be `accepted`, and its criteria must match the request exactly in both directions (adding an `ageRange` narrows the cohort below what was agreed; dropping one broadens it).
+- **The status check is what stops a replay, and it closes the acceptance permanently.** A negotiation can be settled once. If a payment ever settles but the response fails to reach the buyer, they must negotiate again rather than retry — the safe direction, but worth knowing before someone debugs it as a bug.
+- **The `recordCompletedSale` guard is still load-bearing even with the 403 in front of it.** Two concurrent paid requests can both pass the gate before either flips the row, and `res.on("finish")` firing twice would double-write. The 403 hides that path, which is why the test calls `recordCompletedSale` directly instead of relying on the HTTP layer.
+- The `criteria_mismatch` reply deliberately **does not echo the negotiated criteria back** — a caller probing with guesses is not told what the right answer was.
+- `scripts/x402-buy.ts` now writes an `accepted` ledger row on every run. It runs on the seller's own machine against the seller's own ledger, so this is where an acceptance would have been written anyway — but it means the script leaves a row behind, and an interrupted run leaves an unpaid `accepted` one. `scripts/test-payment-binding.ts` does the same for its Part A probe.
+- **`npm run test:e2e` is still broken and this session did not touch it** (deliberately out of scope): `scripts/full-e2e-test.ts:157` asserts a refusal leaves "no new query row", which `recordDecline` invalidated in session 36. Reproduced live — `queries before=1 after=2`, so the suite reports 16/17 and exits 1. One-line fix, still open.
+- Other audit findings left open, in rough order of how likely a judge is to notice: **`allowedDataTypes` is parsed and shown in the panel but never enforced** (harmless today only because the aggregate happens to return exactly `avgSessionCount` + `avgPerformanceScore`); the earnings total sums the **negotiated** price while the endpoint charges a fixed 0.5 ℏ, so "Earned" can misstate what actually landed; `npm test` fails outright (`vitest` declared, no test files); README wrongly claims `create-audit-topic.ts` refuses to run twice (**it has no guard at all**); most runtime deps sit in `devDependencies` and `@langchain/openai` is still declared but unimported.
 
 ### 2026-07-25 — Emre — Claude Code session (38)
 **Completed:** Phase 9.1

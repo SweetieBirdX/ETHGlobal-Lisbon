@@ -67,7 +67,7 @@ Because nobody is watching each deal, trust has to be structural: the buyer prov
 | **Hedera SDK** (`@hiero-ledger/sdk`) | `src/hedera/clients.ts` | Seller and buyer operate from two separate testnet accounts, so every payment is a real transfer between distinct parties. |
 | **Hedera Agent Kit** | `src/hedera/agentkit.ts` | `HederaLangchainToolkit` in `AgentMode.AUTONOMOUS` — the agent signs and submits with the operator key instead of returning bytes for a human to approve. `allCorePlugins` exposes 43 tools; the agent picks the one it needs. |
 | **HCS** (Consensus Service) | `src/hedera/audit.ts`, `HcsAuditTrailHook` | Every completed exchange is written to a single audit topic as JSON. The Agent Kit's own hook also logs tool executions to the same topic, so the trail covers both what the agent *did* and what it *sold*. |
-| **x402** | `src/x402/server.ts`, `src/x402/pay.ts` | The data endpoint is payment-gated: an unpaid `GET` returns **402** with the terms in a header; the buyer agent signs a Hedera transfer and retries; the same request then returns the data. Facilitator: blocky402. Asset: native HBAR (`0.0.0`). |
+| **x402** | `src/x402/server.ts`, `src/x402/pay.ts` | The data endpoint is payment-gated: an unpaid `GET` returns **402** with the terms in a header; the buyer agent signs a Hedera transfer and retries; the same request then returns the data. A request must also name the negotiation that authorised it, so the endpoint cannot be used to buy around the policy. Facilitator: blocky402. Asset: native HBAR (`0.0.0`). |
 | **A2A** (`@a2a-js/sdk`) | `src/a2a/` | The seller publishes an AgentCard at `/.well-known/agent-card.json`; the buyer discovers the endpoint from it and negotiates over JSON-RPC. The buyer is given only a base URL — everything else comes from the card. |
 | **ERC-8004** | `src/erc8004/` | Identity: both agents hold registry NFTs whose `tokenURI` is their registration file. Reputation: after each sale the seller publishes feedback citing the payment transaction, so the rating is checkable rather than asserted. |
 
@@ -86,6 +86,8 @@ An offer is only accepted if it passes all three, in order. Each can only narrow
 3. **Cohort size** — a cohort below `MIN_COHORT_SIZE` (3) is refused. An "average" over one person is that person's record with a different label.
 
 A refusal costs the buyer nothing: no payment is signed, nothing goes on-chain.
+
+**The gates are not bypassable by paying directly.** They would be decorative if the endpoint served anyone holding the price, so a paid request has to name the negotiation that authorised it: the id must belong to an acceptance that is still open, and the criteria must be exactly the ones agreed. A request for a forbidden category, or one with no negotiation behind it, is refused with **403** *before* the payment layer — it is never even quoted a price. And because an acceptance closes once it settles, the same negotiation cannot be paid twice to collect a second audit entry and a second reputation rating.
 
 ---
 
@@ -132,6 +134,7 @@ Run the demo with **`npm run dev`**, not three separate terminals: the policy li
 ```bash
 npm run test:e2e       # full flow, both an accepted and a refused offer  (costs 0.5 ℏ)
 npm run test:errors    # network failure, timeout, insufficient balance, bad agent ids  (costs nothing)
+npm run test:binding   # the endpoint serves only what was negotiated, once  (costs 0.5 ℏ)
 ```
 
 `test:e2e` asserts on real state: the payment settles, the HCS topic sequence increases by one, the reputation count increases by one, and the ledger row becomes `completed` — while the refused offer leaves **no** payment, **no** HCS entry, **no** feedback and **no** ledger row.
@@ -143,7 +146,7 @@ Individual pieces:
 | `scripts/test-transfer.ts` | plain HBAR transfer between the two accounts |
 | `scripts/test-audit-log.ts` | an HCS message lands on the topic |
 | `scripts/test-agent-kit.ts` | the agent answers a balance question by calling a tool |
-| `scripts/x402-buy.ts` | the 402 → sign → 200 round trip on its own |
+| `scripts/x402-buy.ts` | the 402 → sign → 200 round trip on its own (records its own acceptance first, since the endpoint refuses un-negotiated requests) |
 | `scripts/test-negotiation.ts` | A2A negotiation, accept and reject |
 
 ---

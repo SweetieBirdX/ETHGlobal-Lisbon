@@ -189,6 +189,8 @@ export interface CompletedSale {
   auditSequenceNumber?: number;
   /** ReputationRegistry index of the feedback, when the write succeeded. */
   feedbackIndex?: string;
+  /** Set when the sale was already recorded and nothing was written again. */
+  alreadyCompleted?: boolean;
   /** Steps that failed, so a partial completion is never reported as clean. */
   errors: string[];
 }
@@ -201,6 +203,10 @@ export interface CompletedSale {
  * Each step is attempted even if an earlier one failed — a reputation outage
  * should not cost the audit trail its record — and every failure is reported
  * back rather than swallowed.
+ *
+ * Runs at most once per negotiation. Neither of the two Hedera writes is
+ * idempotent: `giveFeedback` appends a new entry every time it is called, so a
+ * sale recorded twice would rate the buyer twice for one payment.
  */
 export async function recordCompletedSale(
   queryId: number,
@@ -216,6 +222,19 @@ export async function recordCompletedSale(
 
     if (!query) {
       throw new Error(`No negotiation recorded for queryId ${queryId}`);
+    }
+
+    // Already recorded: leave the original transaction, audit entry and rating
+    // exactly as they are. A second run here would publish a second ERC-8004
+    // feedback for one payment, which is how a buyer would inflate its rating.
+    if (query.status === "completed") {
+      return {
+        queryId,
+        buyerAgentId: query.buyer_agent_id,
+        transactionId: query.tx_hash ?? transactionId,
+        alreadyCompleted: true,
+        errors,
+      };
     }
 
     const result: CompletedSale = {
