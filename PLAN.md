@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 3 — x402 Payment Layer **complete** (3.1-3.5 done; two real 0.5 ℏ payments settled on testnet). Next: Phase 4.1 — seller AgentCard.
+**Active phase:** Phase 4 — A2A Agent Skeleton (4.1 done). Next: 4.2 — seller executor.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -44,7 +44,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 3.5 End-to-end payment test
 
 ### Phase 4 — A2A Agent Skeleton
-- [ ] 4.1 Seller AgentCard
+- [x] 4.1 Seller AgentCard
 - [ ] 4.2 Seller executor (basic version)
 - [ ] 4.3 Seller agent server
 - [ ] 4.4 Buyer agent client
@@ -104,6 +104,21 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (13)
+**Completed:** Phase 4.1
+**Files changed:** `src/a2a/seller-agent-card.ts` (new) — exports `sellerAgentCard` (typed as the SDK's `AgentCard`) and `SELLER_AGENT_URL` (`http://localhost:4000/a2a/jsonrpc`). Skill `data-access-negotiation` with tags/examples, `capabilities.pushNotifications: false`, all input/output modes `["text"]`, empty `securitySchemes`/`securityRequirements` (trust comes from ERC-8004 in 5.4, not from a transport credential).
+**Verification:** `npx tsc --noEmit` clean. A throwaway script asserted all 12 required field values, then a second one served the card through the SDK's own `agentCardHandler({ legacyCompat: { enabled: true } })` on port 4099 and fetched it twice:
+```
+A2A-Version: 1.0 -> 200  supportedInterfaces = [".../a2a/jsonrpc @1.0", ".../a2a/jsonrpc @0.3"]
+A2A-Version: 0.3 -> 200  protocolVersion: 0.3   url: http://localhost:4000/a2a/jsonrpc
+```
+Both views carry `data-access-negotiation`, `pushNotifications=false`, `in=["text"] out=["text"]`. Throwaways deleted.
+**What the next person should do:** Phase 4.2 — the seller executor (`AgentExecutor` from `@a2a-js/sdk/server`). In 4.3, mount the card with `agentCardHandler({ agentCardProvider: requestHandler, legacyCompat: { enabled: true } })` **at the path** `/.well-known/agent-card.json` — the handler 404s if mounted without a path.
+**Known issues / things to watch for:**
+- **The prompt described the A2A v0.3 card shape; the installed SDK is `@a2a-js/sdk@1.0.0`.** In v1.0 the card has no top-level `protocolVersion`/`url` — the endpoint moved into `supportedInterfaces[]`, each entry carrying its own `url` + `protocolVersion`. Rather than hand-roll an untyped v0.3 literal that `DefaultRequestHandler` would reject in 4.3, the card is written in the v1.0 shape and `duplicateInterfacesForLegacy` (from `@a2a-js/sdk/compat/v0_3`) advertises the same URL for both 1.0 and 0.3. Legacy buyers still receive exactly the requested shape — the SDK translates it per request based on the `A2A-Version` header.
+- The SDK's legacy version constant is **`"0.3"`, not `"0.3.0"`** — using `0.3.0` would not match `A2A_LEGACY_PROTOCOL_VERSION` and legacy negotiation would silently fall through to the v1 card.
+- **The `@x402/*` packages were in `package.json` but missing from `node_modules`** — the Phase 3 manifest was pulled without an install, so `npx tsc --noEmit` failed with 10 `TS2307` errors in `src/x402/server.ts` and `scripts/x402-buy.ts` before I ran `npm install`. If those errors reappear on another machine, run `npm install` first; nothing is wrong with the Phase 3 code.
 
 ### 2026-07-25 — Emre — Claude Code session (12e)
 **Completed:** Phase 3.5 — **Phase 3 is done**
