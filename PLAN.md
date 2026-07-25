@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 3 — x402 Payment Layer (3.1-3.3 done). Next: 3.4 — buyer-side payment script.
+**Active phase:** Phase 3 — x402 Payment Layer (3.1-3.4 done; a real 0.5 ℏ payment has settled on testnet). Next: 3.5 — end-to-end payment test.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -40,7 +40,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 3.1 Mock data provider
 - [x] 3.2 Express server skeleton
 - [x] 3.3 x402 middleware integration
-- [ ] 3.4 Buyer-side payment script
+- [x] 3.4 Buyer-side payment script
 - [ ] 3.5 End-to-end payment test
 
 ### Phase 4 — A2A Agent Skeleton
@@ -104,6 +104,29 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (12d)
+**Completed:** Phase 3.4 — **the project's first real autonomous payment has settled on Hedera testnet**
+**Files changed:** `scripts/x402-buy.ts` (new) — the four x402 steps done by hand so the demo can show the protocol rather than hide it: (1) `fetch` the protected URL → asserts **402**, (2) `decodePaymentRequiredHeader(res.headers.get("payment-required"))` and print each requirement in both ℏ and tinybar, (3) `new x402Client().register("hedera:*", new ExactHederaScheme(createClientHederaSigner(...)))` → `createPaymentPayload`, (4) refetch the same URL with the `payment-signature` header → 200 + data, then read the settlement out of the response with `x402HTTPClient.getPaymentSettleResponse` and print a HashScan link. `@x402/fetch`'s `wrapFetchWithPayment` would collapse steps 1-4 into one call — deliberately not used here.
+**Key handling:** `BUYER_PRIVATE_KEY` is read in exactly one place (`createBuyerSigner()`) and passed straight into `createClientHederaSigner`; it is never logged, never put in a URL, and never reaches the LLM-driven parts of the agent.
+**Verification (real testnet money):** `npx tsc --noEmit` clean. Server started, then `npx tsx scripts/x402-buy.ts`:
+```
+-> GET http://localhost:4021/data/cohort-insight?ageRange=25-34&activityType=running
+<- HTTP 402
+   asking 0.5 ℏ (50000000 tinybar, asset 0.0.0) to 0.0.9696085 on hedera:testnet
+   signed by 0.0.9697053 — retrying with payment
+<- HTTP 200
+data: { "participantCount": 403, "avgPerformanceScore": 71.9, "trend": "down" }
+settlement: success=true payer=0.0.9697053
+transaction: 0.0.7162784@1784948405.496374340
+```
+Balances moved exactly as expected — seller `999.84283018 → 1000.34283018 ℏ` (**+0.5**), buyer `1000 → 999.5 ℏ` (**−0.5**). Mirror node confirms the transaction `SUCCESS`, `CRYPTOTRANSFER`: `0.0.9697053 −0.5`, `0.0.9696085 +0.5`, plus the network fee `0.00283122` paid by **`0.0.7162784` — the facilitator**, not the buyer. https://hashscan.io/testnet/transaction/0.0.7162784-1784948405-496374340
+**What the next person should do:** Phase 3.5 — the scripted end-to-end payment test (start server → unpaid 402 → paid 200 → assert the balance delta). `scripts/x402-buy.ts` already does the flow; 3.5 mainly needs to own the server lifecycle and assert instead of print.
+**Known issues / things to watch for:**
+- The settlement transaction id is issued by the **facilitator's** account (`0.0.7162784@...`), not the buyer's — so on HashScan the payer shown is the facilitator while the HBAR still moves buyer → seller. Worth saying out loud in the demo, and Phase 5.5 should put *this* id in the ERC-8004 feedback's `proofOfPayment`.
+- The demo therefore needs no fee budget on the buyer beyond the price itself — the buyer went from exactly 1000 ℏ to exactly 999.5 ℏ.
+- Every run of this script spends 0.5 ℏ of the buyer's 1000 ℏ testnet balance.
+- Incidentally this is the first time the buyer account has ever transacted; **Phase 1.5's `scripts/test-transfer.ts` still has never been executed** (see session (12)).
 
 ### 2026-07-25 — Emre — Claude Code session (12c)
 **Completed:** Phase 3.3 — **the price is decided: 0.5 HBAR per cohort query** (= `50000000` tinybar, asset `0.0.0`)
