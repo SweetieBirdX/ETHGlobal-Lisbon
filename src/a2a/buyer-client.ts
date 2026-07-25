@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Role, type Message, type Part, type SendMessageResult } from "@a2a-js/sdk";
 import { ClientFactory } from "@a2a-js/sdk/client";
+import { getBuyerAgentId } from "../erc8004/agent-ids.js";
 import { SELLER_AGENT_URL } from "./seller-agent-card.js";
 
 /**
@@ -101,7 +102,9 @@ export async function sendNegotiationMessage(
     taskId: "",
     role: Role.ROLE_USER,
     parts: [textPart(text)],
-    metadata,
+    // The buyer names its ERC-8004 identity on every message; the seller looks
+    // it up in the registry before deciding whether to deal (Phase 5.4).
+    metadata: { buyerAgentId: getBuyerAgentId(), ...metadata },
     extensions: [],
     referenceTaskIds: [],
   };

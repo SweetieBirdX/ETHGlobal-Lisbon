@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 5 — ERC-8004 (5.1 done). Next: 5.2 — agent registration files.
+**Active phase:** Phase 5 — ERC-8004 **complete** (5.1-5.5; **seller agentId 103, buyer agentId 104** on Hedera testnet). Next: Phase 6.1 — encrypted database schema.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -52,10 +52,10 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ### Phase 5 — ERC-8004
 - [x] 5.1 Contract connections
-- [ ] 5.2 Agent registration files
-- [ ] 5.3 Register the agents (→ produces `agent-ids.json`)
-- [ ] 5.4 Identity verification added to seller executor
-- [ ] 5.5 Reputation feedback submission
+- [x] 5.2 Agent registration files
+- [x] 5.3 Register the agents (→ produces `agent-ids.json`)
+- [x] 5.4 Identity verification added to seller executor
+- [x] 5.5 Reputation feedback submission
 
 ### Phase 6 — Off-chain Data + Policy Engine
 - [ ] 6.1 Encrypted database schema
@@ -104,6 +104,55 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (22)
+**Completed:** Phase 5.5 — **Phase 5 is done**
+**Files changed:** `src/erc8004/feedback.ts` (new) — `submitFeedback(buyerAgentId, score, paymentTxHash)` calls `giveFeedback(agentId, value, valueDecimals, tag1, tag2, endpoint, feedbackURI, feedbackHash)` from the seller wallet with `tag1: "dataAccessCompleted"`, exports `SCORE_SUCCESS`/`SCORE_FAILURE` (100/0), builds a base64 `feedbackURI` containing `proofOfPayment.txHash`, and hashes the same document into `feedbackHash` (keccak256) so it stays tamper-evident. `src/erc8004/wallets.ts` (new) — `createSellerWallet()`/`createBuyerWallet()`, the DER→raw key normalisation extracted from `scripts/register-agents.ts`, which now imports it instead of carrying its own copy.
+**Verification:** `npx tsc --noEmit` clean. Ran for real against testnet, rating buyer **agentId 104** with the actual Phase 3.5 payment `0.0.7162784@1784948570.524376611`: summary went `count=0 value=0` → `count=1 value=100`; `readFeedback(104, sellerWallet, 1)` returns `value=100 decimals=0 tag1="dataAccessCompleted" tag2="" revoked=false`; the `feedbackURI` decodes to `{"tag":"dataAccessCompleted","score":100,"outcome":"completed","proofOfPayment":{"txHash":"0.0.7162784@1784948570.524376611"},…}`. Feedback tx `0x056519e7…53aa`, confirmed on the mirror node: `SUCCESS`, to `0x8004b663…8713` (ReputationRegistry), block 38421156, gas 198238. https://hashscan.io/testnet/transaction/0x056519e77bcb9d18f37387f77f1adca27bbfe60e1d5903326fca8beadbce53aa
+**What the next person should do:** Phase 6.1 — the encrypted SQLite schema (`better-sqlite3` is **not installed yet**; `npm install better-sqlite3` first).
+**Known issues / things to watch for:**
+- **`feedbackIndex` starts at 1, not 0.** `getLastIndex` returns the latest; do not assume zero-based when reading feedback back in Phase 7.3 or the frontend.
+- The score is stored as `int128` + a separate `valueDecimals` byte (we use `100` with `decimals=0`). A reader that ignores `valueDecimals` will misread any future fractional score.
+- `giveFeedback` is **not idempotent** — every call appends another entry and shifts the summary. Phase 7.3 must call it once per completed deal, not once per retry.
+- The proof of payment is a **Hedera transaction id** (`0.0.x@seconds.nanos`), not an EVM hash. Anything verifying it must query the mirror node's transactions endpoint, not `eth_getTransactionByHash`.
+- Feedback currently comes only from the seller about the buyer. The registry supports the reverse too, which would be a natural addition if there is time.
+
+### 2026-07-25 — Emre — Claude Code session (21)
+**Completed:** Phase 5.4
+**Files changed:** `src/erc8004/agent-ids.ts` (new) — reads `agent-ids.json` once and exposes `getBuyerAgentId()`, `getSellerAgentId()`, `getApprovedAgentIds()`, each overridable by env (`BUYER_AGENT_ID`, `SELLER_AGENT_ID`, `APPROVED_AGENT_IDS`) so a test can impersonate an agent that is not in the file. `src/a2a/buyer-client.ts` — every message now carries `metadata.buyerAgentId`. `src/a2a/seller-executor.ts` — new exported `verifyBuyerIdentity(agentId)` and an identity gate at the top of `execute()`; reply publishing moved into a private `publishReply()` and the reply metadata now carries `identityVerified` and `identityReason` alongside `decision`.
+**Verification:** `npx tsc --noEmit` clean. Unit-level, against the **real registry on testnet** — 4/4: agent 104 (registered, active, approved) → verified; agent **103** (registered and active but *not* on the approved list) → declined for lack of attestation; agent 999999 (never minted) → "not registered"; `"not-an-id"` → rejected before any RPC call. End-to-end over A2A with the server running — real buyer → `accept` / `identityVerified=true`; `buyerAgentId: "999999"` → `decline`; no `buyerAgentId` at all → `decline` asking the buyer to identify itself. `scripts/test-negotiation.ts` still passes 2/2, so 4.5 did not regress. Throwaways deleted, server stopped.
+**What the next person should do:** Phase 5.5 — reputation feedback via `reputationRegistry.giveFeedback(...)` after a completed deal. Check the v2.0.0 ABI for the exact signature (`giveFeedback`, `readFeedback`, `getSummary`, `appendResponse`).
+**Known issues / things to watch for:**
+- **`getAgentWallet(id)` returns the zero address for an unminted id, while `ownerOf(id)` reverts** — the executor uses `getAgentWallet` so an unknown buyer is a clean "not registered" answer instead of an exception to catch.
+- The approved-list check is the **simulated compliance attestation** (a decision already recorded in this file). It is deliberately separate from registration: agent 103 proves the difference — on-chain, active, and still declined. Replacing it with a real ValidationRegistry lookup means changing only `getApprovedAgentIds()`.
+- **Identity is checked before the offer is read**, so no unverified agent can reach `decideOnOffer` — worth keeping that order when the policy engine replaces it in 6.5.
+- `execute()` now makes **2 RPC calls per negotiation** (`getAgentWallet` + `tokenURI`) against Hashio. Fine for a demo; if the live demo feels sluggish, cache verified ids for the session.
+- Registration alone is cheap to obtain — anyone can mint an identity. The attestation list is what actually gates access, and it is currently populated from `agent-ids.json`, i.e. the seller trusts exactly one buyer.
+
+### 2026-07-25 — Emre — Claude Code session (20)
+**Completed:** Phase 5.3 — **both agents now have ERC-8004 identities on Hedera testnet**
+**Files changed:** `scripts/register-agents.ts` (new), `agent-ids.json` (new, generated).
+**Registered:** seller **agentId 103** (owner `0x029640C118B1d19e99E75Acc57399Ea8B96C8dBD`, tx `0xb32275a5…65dd`, block 38420755) · buyer **agentId 104** (owner `0xd25e005B401101987446dDf9dc813f409494902F`, tx `0x3c27bed1…8824`, block 38420758).
+**Verification:** `npx tsc --noEmit` clean. Ran the script for real; then a separate throwaway read both identities **back out of the registry**: `ownerOf(103)`/`ownerOf(104)` match the wallets that registered them, and `tokenURI` decodes to the expected registration file for each — seller with the A2A service entry, buyer with `services: []`, both `active: true`, `x402Support: true`, `supportedTrust: ["reputation"]`. Throwaway deleted.
+**What the next person should do:** Phase 5.4 — verify the buyer's identity inside the seller executor: read the agent id off the incoming A2A message, `tokenURI` → `fromDataUri`, and refuse to negotiate unless the file says `active: true`. `agent-ids.json` has the ids to test against.
+**Known issues / things to watch for:**
+- **The script is not idempotent and knows it**: every run mints a *new* identity. It refuses to run when `agent-ids.json` exists unless `FORCE=1`. Do not delete that file casually — ids 103/104 cannot be recovered from it, only re-minted.
+- Ethers needs the **raw** 32-byte key while Hedera hands out DER; `walletFromHederaKey()` normalises via `PrivateKey.fromStringECDSA(...).toStringRaw()`. Both wallets' EVM aliases were already funded (seller 1000.84 ℏ, buyer 999.0 ℏ) — an unfunded alias fails with a confusing relay error, so the script checks balance first and says so plainly.
+- `register()` returns the id, but **a transaction cannot return a value** — the id is parsed out of the `Registered(uint256 indexed agentId, string agentURI, address indexed owner)` event in the receipt.
+- An explicit `gasLimit` of 1,000,000 is set because Hedera's relay does not reliably estimate this call.
+- **`agent-ids.json` is not gitignored**, so it will be committed. That is probably what you want (the demo and 5.4 need the ids), and it contains only public data — ids, EVM addresses, tx hashes and the same base64 metadata already stored on-chain. No keys.
+
+### 2026-07-25 — Emre — Claude Code session (19)
+**Completed:** Phase 5.2
+**Files changed:** `src/erc8004/registration-files.ts` (new) — `RegistrationFile`/`AgentService` types, `sellerRegistrationFile` and `buyerRegistrationFile` (both `x402Support: true`, `active: true`, `supportedTrust: ["reputation"]`), `toDataUri()` → `data:application/json;base64,…`, and `fromDataUri()` which decodes and rejects anything that is not a base64 JSON data URI.
+**Verification:** `npx tsc --noEmit` clean. A throwaway script ran 18 assertions, all passing: both files round-trip through `toDataUri`/`fromDataUri` byte-identically, both URIs carry the `data:application/json;base64,` prefix and decode with the browser-native `atob` (so the URI works if pasted into a browser or an explorer), the seller's A2A service is `{name:"A2A", endpoint:"http://localhost:4000/a2a/jsonrpc", version:"0.3.0"}`, and `fromDataUri` throws on an `https://` URI. Seller URI is 993 chars, buyer 777. Throwaway deleted.
+**What the next person should do:** Phase 5.3 — register both agents with `identityRegistry["register(string)"](toDataUri(file))` from a wallet, and write the returned agent ids to `agent-ids.json`.
+**Known issues / things to watch for:**
+- **The buyer's `services` array is deliberately empty.** The buyer only initiates negotiations and serves no A2A endpoint, so advertising one would put a false claim on-chain. Add an entry if a buyer-side server is ever built.
+- The seller's endpoint is imported from `SELLER_AGENT_URL`, so the registration file cannot drift from the agent card. It is a **localhost URL** — fine for the demo, but it means the on-chain metadata is not reachable by anyone else.
+- `A2A_VERSION` here is `"0.3.0"` as specified in the prompt, whereas the A2A SDK's own legacy constant is `"0.3"` (see session 13). The registration file is descriptive metadata and nothing parses it, so the mismatch is harmless — but do not copy this string into SDK calls.
+- `REGISTRATION_FILE_TYPE` is set to the EIP-8004 URL. The upstream contracts repo ships **no example registration file** (checked: it contains only the three ABIs plus build config), so the exact `type` value the spec expects was not verifiable — worth a look at the EIP text before submission.
+- The `image` is an inline 1x1 transparent PNG data URI, chosen so nothing depends on an external host staying up during judging.
 
 ### 2026-07-25 — Emre — Claude Code session (18)
 **Completed:** Phase 5.1
