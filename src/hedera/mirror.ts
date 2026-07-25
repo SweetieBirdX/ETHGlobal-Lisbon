@@ -32,12 +32,28 @@ interface MirrorTopicMessage {
   sequence_number: number;
   consensus_timestamp: string;
   message: string;
+  chunk_info?: {
+    initial_transaction_id?: {
+      account_id: string;
+      transaction_valid_start: string;
+    } | null;
+    number: number;
+    total: number;
+  } | null;
 }
 
 /**
  * Fetches the most recent messages on the topic, newest first.
  *
- * @param limit how many to read (the mirror node caps a page at 100)
+ * A single HCS message tops out at 1024 bytes; the SDK transparently splits
+ * larger payloads into chunks, which the mirror node returns as separate rows.
+ * Messages carrying UAIDs and inline document URIs cross that limit, so chunks
+ * are reassembled here (grouped by their initiating transaction) — a caller
+ * always sees whole logical messages. A group cut off by the page boundary
+ * decodes as a fragment, which simply fails JSON parsing like any prose line.
+ *
+ * @param limit how many raw rows to read (the mirror node caps a page at 100);
+ *              chunked messages mean the logical count can come back smaller
  */
 export async function fetchTopicMessages(
   limit = 100,
@@ -56,8 +72,36 @@ export async function fetchTopicMessages(
 
   const body = (await response.json()) as { messages?: MirrorTopicMessage[] };
 
-  return (body.messages ?? []).map((message) => {
-    const text = Buffer.from(message.message, "base64").toString("utf8");
+  // Group chunk rows back into logical messages, preserving newest-first order.
+  const groups: MirrorTopicMessage[][] = [];
+  const byInitialTx = new Map<string, MirrorTopicMessage[]>();
+  for (const row of body.messages ?? []) {
+    const info = row.chunk_info;
+    const tx = info?.initial_transaction_id;
+    if (!info || info.total <= 1 || !tx) {
+      groups.push([row]);
+      continue;
+    }
+    const key = `${tx.account_id}@${tx.transaction_valid_start}`;
+    const group = byInitialTx.get(key);
+    if (group) {
+      group.push(row);
+    } else {
+      const started = [row];
+      byInitialTx.set(key, started);
+      groups.push(started);
+    }
+  }
+
+  return groups.map((group) => {
+    const chunks = [...group].sort(
+      (a, b) => (a.chunk_info?.number ?? 1) - (b.chunk_info?.number ?? 1),
+    );
+    // Concatenate as bytes before decoding — a chunk boundary can fall inside
+    // a multi-byte UTF-8 character.
+    const text = Buffer.concat(
+      chunks.map((chunk) => Buffer.from(chunk.message, "base64")),
+    ).toString("utf8");
     let json: Record<string, unknown> | undefined;
     try {
       const parsed = JSON.parse(text) as unknown;
@@ -67,9 +111,10 @@ export async function fetchTopicMessages(
     } catch {
       // Not ours — the Agent Kit's audit hook writes plain text.
     }
+    const last = chunks[chunks.length - 1]!;
     return {
-      sequenceNumber: message.sequence_number,
-      consensusTimestamp: message.consensus_timestamp,
+      sequenceNumber: last.sequence_number,
+      consensusTimestamp: last.consensus_timestamp,
       text,
       json,
     };

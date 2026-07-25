@@ -1,25 +1,26 @@
-import { keccak256, toUtf8Bytes } from "ethers";
+import { createHash } from "node:crypto";
 import { logAuditEvent } from "../hedera/audit.js";
 import { createSellerClient } from "../hedera/clients.js";
 import { toHashScanTransactionId } from "../x402/pay.js";
-import { getApprovedAgentIds } from "./agent-ids.js";
-import { createSellerWallet } from "./wallets.js";
+import { getApprovedUaids, getSellerUaid } from "./agent-ids.js";
+import { parseUaid } from "./uaid.js";
 
 /**
  * Compliance attestations for buyer agents.
  *
  * ERC-8004 defines a ValidationRegistry for exactly this — a validator publishes
- * a verdict about an agent that anyone can read back. **It has no live
- * deployment on any chain:** the official deployment list covers only the
- * Identity and Reputation registries, because the validation section of the spec
- * is still under active revision with the TEE community. `abis/ValidationRegistry.json`
- * is an interface with no bytecode and no address behind it.
+ * a verdict about an agent that anyone can read back. We avoid it twice over:
+ * **it has no live deployment on any chain** (the official deployment list
+ * covers only the Identity and Reputation registries, because the validation
+ * section of the spec is still under active revision with the TEE community),
+ * and **this project is now deliberately EVM-free** — identity, reputation and
+ * attestation all live on Hedera-native services.
  *
- * So the attestation is recorded on Hedera Consensus Service instead, using the
- * registry's own vocabulary — `validatorAddress`, `agentId`, `requestURI`,
+ * So the attestation is recorded on Hedera Consensus Service, using the
+ * registry's own vocabulary — `validatorUaid`, `agentUaid`, `requestURI`,
  * `requestHash`, `response`, `responseURI`, `responseHash`, `tag`. The record is
- * public, ordered and tamper-evident, and when the registry does ship, moving to
- * it is a change of substrate rather than a redesign.
+ * public, ordered and tamper-evident, and if a validation registry ever ships,
+ * moving to it is a change of substrate rather than a redesign.
  *
  * **The validator is the seller itself.** There is no independent auditor in
  * this demo, so an attestation here proves that the check ran and what it
@@ -37,8 +38,8 @@ export const SCORE_NON_COMPLIANT = 0;
 
 export interface ValidationRequestDocument {
   tag: string;
-  agentId: string;
-  validatorAddress: string;
+  agentUaid: string;
+  validatorUaid: string;
   /** What the validator is being asked to confirm. */
   claim: string;
   requestedAt: string;
@@ -46,8 +47,8 @@ export interface ValidationRequestDocument {
 
 export interface ValidationResponseDocument {
   tag: string;
-  agentId: string;
-  validatorAddress: string;
+  agentUaid: string;
+  validatorUaid: string;
   /** 0-100, mirroring the registry's `uint8 response`. */
   response: number;
   /** Why the verdict came out that way. */
@@ -83,12 +84,13 @@ function toDataUri(document: object): string {
   return `data:application/json;base64,${base64}`;
 }
 
+/** sha256, 0x-hex — keccak only existed here for EVM alignment. */
 const hashDocument = (document: object): string =>
-  keccak256(toUtf8Bytes(JSON.stringify(document)));
+  `0x${createHash("sha256").update(JSON.stringify(document), "utf8").digest("hex")}`;
 
-/** The address acting as validator — the seller's own EVM identity. */
-export function validatorAddress(): string {
-  return createSellerWallet().address;
+/** The UAID acting as validator — the seller's own identity. */
+export function validatorUaid(): string {
+  return getSellerUaid();
 }
 
 /**
@@ -98,15 +100,13 @@ export function validatorAddress(): string {
  * The document is hashed so the record stays checkable even though the URI
  * travels inline.
  */
-export async function requestValidation(agentId: string): Promise<ValidationWrite> {
-  if (!/^\d+$/.test(agentId)) {
-    throw new Error(`Invalid agent id: ${agentId}`);
-  }
+export async function requestValidation(agentUaid: string): Promise<ValidationWrite> {
+  parseUaid(agentUaid); // throws on malformed input
 
   const document: ValidationRequestDocument = {
     tag: VALIDATION_TAG,
-    agentId,
-    validatorAddress: validatorAddress(),
+    agentUaid,
+    validatorUaid: validatorUaid(),
     claim: "Agent is authorised to receive aggregated health and fitness data.",
     requestedAt: new Date().toISOString(),
   };
@@ -117,8 +117,8 @@ export async function requestValidation(agentId: string): Promise<ValidationWrit
   try {
     const write = await logAuditEvent(client, {
       event: "validation_request",
-      validatorAddress: document.validatorAddress,
-      agentId,
+      validatorUaid: document.validatorUaid,
+      agentUaid,
       requestURI: toDataUri(document),
       requestHash,
       tag: VALIDATION_TAG,
@@ -145,15 +145,15 @@ export async function requestValidation(agentId: string): Promise<ValidationWrit
  */
 export async function respondValidation(
   requestHash: string,
-  agentId: string,
+  agentUaid: string,
 ): Promise<ValidationResponseWrite> {
-  const approved = getApprovedAgentIds().includes(agentId);
+  const approved = getApprovedUaids().includes(agentUaid);
   const response = approved ? SCORE_COMPLIANT : SCORE_NON_COMPLIANT;
 
   const document: ValidationResponseDocument = {
     tag: VALIDATION_TAG,
-    agentId,
-    validatorAddress: validatorAddress(),
+    agentUaid,
+    validatorUaid: validatorUaid(),
     response,
     reason: approved
       ? "Agent holds a compliance attestation for health data from the data owner."
@@ -167,8 +167,8 @@ export async function respondValidation(
   try {
     const write = await logAuditEvent(client, {
       event: "validation_response",
-      validatorAddress: document.validatorAddress,
-      agentId,
+      validatorUaid: document.validatorUaid,
+      agentUaid,
       requestHash,
       response,
       responseURI: toDataUri(document),
@@ -195,9 +195,9 @@ export async function respondValidation(
  * Both halves are written: a verdict with no recorded request is not an audit
  * trail, and the failing case is the one worth being able to prove afterwards.
  */
-export async function attestCompliance(agentId: string): Promise<Attestation> {
-  const request = await requestValidation(agentId);
-  const response = await respondValidation(request.requestHash, agentId);
+export async function attestCompliance(agentUaid: string): Promise<Attestation> {
+  const request = await requestValidation(agentUaid);
+  const response = await respondValidation(request.requestHash, agentUaid);
 
   return {
     requestHash: request.requestHash,
