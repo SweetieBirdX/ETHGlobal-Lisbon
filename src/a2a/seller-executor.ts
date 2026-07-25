@@ -31,7 +31,8 @@ import {
 import { logAuditEvent } from "../hedera/audit.js";
 import { createSellerClient } from "../hedera/clients.js";
 import { mintReceipt, receiptTokenId } from "../hedera/receipt.js";
-import { bucketOf, parsePolicy, type DataPolicy } from "../policy/parser.js";
+import { parsePolicy } from "../policy/parser.js";
+import type { LicenceOffer, LicencePolicy } from "../types/marketplace.js";
 import {
   COHORT_INSIGHT_PATH,
   COHORT_INSIGHT_PRICE_HBAR,
@@ -56,10 +57,16 @@ export type NegotiationDecision = "accept" | "decline";
 export type DeclineReason =
   | "identity_unverified"
   | "offer_incomplete"
-  | "category_mismatch"
-  /** The buyer asked for a data type the owner's policy does not permit. */
-  | "data_type_not_permitted"
+  /** The buyer asked for a licence type the policy does not permit. */
+  | "licence_type_not_permitted"
+  /** The buyer named a use the rights holder forbids outright. */
+  | "use_case_forbidden"
+  /** The buyer asked for more shares than one licence may carry. */
+  | "share_cap_exceeded"
   | "price_too_low"
+  // Legacy members still referenced by `execute` until its own rewrite:
+  | "category_mismatch"
+  | "data_type_not_permitted"
   | "cohort_too_small"
   /** Something failed on the seller's side; the buyer is not at fault. */
   | "internal_error";
@@ -130,7 +137,7 @@ export const DEFAULT_POLICY_STATEMENT =
     "session counts only — to verified research companies, minimum 0.4 HBAR per query. " +
     "Never share my heart rate, and never any health or medication data.";
 
-let cachedPolicy: DataPolicy | null = null;
+let cachedPolicy: LicencePolicy | null = null;
 
 /**
  * Returns the active policy, parsing the statement once.
@@ -139,7 +146,7 @@ let cachedPolicy: DataPolicy | null = null;
  * offer and risk the answer drifting between them; the owner set the policy
  * once, so it is interpreted once.
  */
-export async function getPolicy(): Promise<DataPolicy> {
+export async function getPolicy(): Promise<LicencePolicy> {
   if (cachedPolicy) return cachedPolicy;
 
   try {
@@ -156,7 +163,7 @@ export async function getPolicy(): Promise<DataPolicy> {
 }
 
 /** Replaces the active policy — used by the frontend and by tests. */
-export function setPolicy(policy: DataPolicy | null): void {
+export function setPolicy(policy: LicencePolicy | null): void {
   cachedPolicy = policy;
 }
 
@@ -377,12 +384,16 @@ export function extractOffer(message: Message): Offer {
 }
 
 /** Human wording for a data type, for refusals meant to be read aloud. */
-function describeDataType(dataType: string): string {
+/** Names a use case the way the refusal sentence needs it said. */
+function describeUseCase(useCase: string): string {
   const labels: Record<string, string> = {
-    cycleTracking: "menstrual-cycle tracking data",
-    medicationCount: "medication data",
+    "political-ad": "political advertising",
+    advertising: "advertising",
+    film: "a film",
+    game: "a game",
+    documentary: "a documentary",
   };
-  return labels[dataType] ?? dataType;
+  return labels[useCase] ?? useCase;
 }
 
 /**
@@ -399,75 +410,98 @@ function matchCategory(requested: string, allowed: string[]): string | undefined
 }
 
 /**
- * Decides an offer against the owner's policy.
+ * Decides a licence offer against the rights holder's policy.
  *
  * Pure and synchronous, so the rules can be tested without a network: the
- * cohort-availability check happens separately in `execute`.
+ * share-availability check happens separately in `execute`.
  */
-export function evaluateOffer(offer: Offer, policy: DataPolicy): NegotiationResult {
-  if (!offer.category || offer.priceHbar === undefined || Number.isNaN(offer.priceHbar)) {
+export function evaluateOffer(
+  offer: LicenceOffer,
+  policy: LicencePolicy,
+): NegotiationResult {
+  // 1. Incomplete. Every gate below needs its field, so all of them are
+  // required — including the use case: an offer that names none would slip
+  // past the forbidden-use check unexamined.
+  if (
+    offer.trackId === undefined ||
+    offer.shares === undefined ||
+    !Number.isFinite(offer.shares) ||
+    offer.shares <= 0 ||
+    !offer.licenceType ||
+    !offer.useCase ||
+    offer.priceHbar === undefined ||
+    Number.isNaN(offer.priceHbar)
+  ) {
     return {
       decision: "decline",
       reason: "offer_incomplete",
       reply:
-        "Your offer is incomplete. Send the data category and the price in HBAR you are offering, " +
-        "and I will evaluate it against the data owner's policy.",
+        "Your offer is incomplete. Send the track, the number of shares, the licence type, " +
+        "the intended use and the price in HBAR you are offering, and I will evaluate it " +
+        "against the rights holder's policy.",
     };
   }
 
-  const matched = matchCategory(offer.category, policy.allowedCategories);
-  if (!matched) {
+  const licenceType = offer.licenceType.trim().toLowerCase();
+  const useCase = offer.useCase.trim().toLowerCase();
+
+  // 2. Licence type.
+  if (!policy.allowedLicenceTypes.includes(licenceType)) {
     return {
       decision: "decline",
-      reason: "category_mismatch",
+      reason: "licence_type_not_permitted",
       reply:
-        `Category mismatch — the owner's policy does not permit selling "${offer.category}" data. ` +
-        `Permitted: ${policy.allowedCategories.join(", ") || "nothing at present"}. ` +
+        `The rights holder's policy does not permit ${licenceType} licences. ` +
+        `Permitted licence types: ${policy.allowedLicenceTypes.join(", ") || "none at present"}. ` +
         "This is not a matter of price.",
     };
   }
 
-  // Data types. An offer that names none is asking for the standard aggregate,
-  // which exposes DEFAULT_OFFER_DATA_TYPES — so that is what gets checked.
-  const requestedTypes = normalizeDataTypes(
-    offer.dataTypes?.length ? offer.dataTypes : DEFAULT_OFFER_DATA_TYPES,
-  );
-  const refusedTypes = requestedTypes.filter(
-    (dataType) => !policy.allowedDataTypes.includes(dataType),
-  );
-  if (refusedTypes.length > 0) {
-    const health = refusedTypes.filter((dataType) => bucketOf(dataType) === "health");
+  // 3. Forbidden use. The refusal names the use, because "declined" without
+  // the why is indistinguishable from a haggling position — this one is not.
+  if (policy.forbiddenUseCases.includes(useCase)) {
     return {
       decision: "decline",
-      reason: "data_type_not_permitted",
+      reason: "use_case_forbidden",
       reply:
-        (health.length > 0
-          ? `You asked for ${health.map(describeDataType).join(" and ")} — that is health data, ` +
-            "and the owner's policy does not permit selling any health data. "
-          : `You asked for ${refusedTypes.join(", ")}, which the owner's policy does not permit. `) +
-        `Permitted data types: ${policy.allowedDataTypes.join(", ") || "none at present"}. ` +
-        "This is not a matter of price.",
+        `You asked to use this track in ${describeUseCase(useCase)}. ` +
+        "The rights holder's policy forbids that use. This is not a matter of price.",
     };
   }
 
-  if (offer.priceHbar < policy.minPrice) {
+  // 4. Share cap.
+  if (offer.shares > policy.maxSharesPerLicence) {
+    return {
+      decision: "decline",
+      reason: "share_cap_exceeded",
+      reply:
+        `You asked for ${offer.shares} shares, and the rights holder grants at most ` +
+        `${policy.maxSharesPerLicence} per licence. Reduce the share count and I will reconsider.`,
+    };
+  }
+
+  // 5. Price. Rounded to 8 decimals — one tinybar is 10⁻⁸ ℏ, so anything
+  // finer cannot settle, and unrounded float products fail equality checks.
+  const floorHbar = Number((policy.minPricePerShareHbar * offer.shares).toFixed(8));
+  if (offer.priceHbar < floorHbar) {
     return {
       decision: "decline",
       reason: "price_too_low",
-      minPriceHbar: policy.minPrice,
+      minPriceHbar: floorHbar,
       reply:
-        `Price too low — you offered ${offer.priceHbar} HBAR and the owner's minimum is ${policy.minPrice} HBAR ` +
-        `for ${matched} data. Raise the offer and I will reconsider.`,
+        `Price too low — you offered ${offer.priceHbar} HBAR and the rights holder's minimum is ` +
+        `${floorHbar} HBAR for ${offer.shares} shares (${policy.minPricePerShareHbar} ℏ per share). ` +
+        "Raise the offer and I will reconsider.",
     };
   }
 
   return {
     decision: "accept",
-    dataTypes: requestedTypes,
     reply:
-      `Offer accepted for ${matched} data (${requestedTypes.join(", ")}) at ${offer.priceHbar} HBAR. ` +
-      "The cohort aggregate is available from the paid endpoint; settle the x402 payment and it will be released. " +
-      "Raw records stay in the owner's encrypted store.",
+      `Offer accepted: a ${licenceType} licence on track ${offer.trackId}, ${offer.shares} shares` +
+      `${offer.territory ? `, ${offer.territory}` : ""}, for ${describeUseCase(useCase)}, ` +
+      `at ${offer.priceHbar} HBAR. Settle the x402 payment and the licence will be granted. ` +
+      "The master reference stays encrypted until then.",
   };
 }
 
