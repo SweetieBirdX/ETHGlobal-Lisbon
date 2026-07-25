@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 2 — Hedera Agent Kit complete (2.1-2.3 done). Next: Phase 3.1 — mock data provider.
+**Active phase:** Phase 3 — x402 Payment Layer (3.1 done). Next: 3.2 — Express server skeleton.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -37,7 +37,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 2.3 HCSAuditTrailHook integration
 
 ### Phase 3 — x402 Payment Layer
-- [ ] 3.1 Mock data provider
+- [x] 3.1 Mock data provider
 - [ ] 3.2 Express server skeleton
 - [ ] 3.3 x402 middleware integration
 - [ ] 3.4 Buyer-side payment script
@@ -104,6 +104,18 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (12)
+**Completed:** Phase 3.1 (plus a review of everything pulled in `adfb396..19bb162`)
+**Files changed:** `src/data/provider.ts` (new) — `DataProvider` interface with `getCohortInsight(criteria: object): Promise<object>`, and `MockDataProvider` returning a typed `CohortInsight` (`participantCount` 120-480, `avgPerformanceScore` 62.0-91.0 to one decimal, `trend` one of `up`/`flat`/`down`). Values are randomised per call on purpose so a demo visibly returns fresh data for the payment just settled; `criteria` is accepted and ignored until Phase 6.3 replaces this with the real encrypted-DB aggregation.
+**Verification:** `npx tsc --noEmit` clean. A throwaway `scripts/_providercheck.ts` called the provider 5× through the `DataProvider` interface type: 5 distinct results, keys exactly `avgPerformanceScore,participantCount,trend`, e.g. `{"participantCount":460,"avgPerformanceScore":76.9,"trend":"up"}`. Throwaway deleted.
+**Review findings on the pulled commits (act on these):**
+- **`19bb162` deleted `src/data/provider.ts` and `src/x402/server.ts`, which `1e4162e` had added one minute earlier** — the Phase 3.1/3.2 work was reverted, almost certainly by a parallel session committing from a stale working tree. `provider.ts` is now rebuilt (above); **`src/x402/server.ts` is still missing** and has to be redone in 3.2. Recover the old version with `git show 1e4162e:src/x402/server.ts` if useful (express app on port 4021, `/catalog` + `/data/cohort-insight`). **Two sessions committing at once is what caused this — pull before starting a block.**
+- **Phase 1.5 is ticked but has never actually run against testnet.** The buyer account `0.0.9697053` is at **exactly 1000 ℏ**, so it has never paid a transaction fee, i.e. `scripts/test-transfer.ts` has never executed — despite commit `2f03539` being titled "test: HBAR transfer test verified on Hedera testnet". Session (9)'s own note says as much. Run `npx tsx scripts/test-transfer.ts` once before Phase 3 builds payment on top of it.
+- `npm install` is required after this pull (the `@langchain/groq` dependency + `@langchain/core` override arrived in `19bb162`); without it `npx tsc --noEmit` fails with TS2307 + the TS2769 tool-type error in `scripts/test-agent-kit.ts`. Clean after installing.
+- Re-ran `scripts/check-balance.ts` (seller 999.84810418 ℏ, buyer 1000 ℏ) and `scripts/test-audit-log.ts` (topic `0.0.9738154`: 2 → 3 messages, "OK") — both pass on the pulled state.
+**What the next person should do:** Phase 3.2 — Express server skeleton in `src/x402/server.ts` serving the mock provider, then 3.3 for the x402 middleware. The x402 packages are still not installed.
+**Known issues / things to watch for:** `npm install` again rewrote `package-lock.json` (the known libc/`peer` noise) — reverted with `git checkout -- package-lock.json`, expect it on every machine. Every runtime dependency except `@langchain/groq` still sits in `devDependencies`; still worth one cleanup commit.
 
 ### 2026-07-25 — Emre — Claude Code session (11)
 **Completed:** Phase 2.3 — Phase 2 is done
