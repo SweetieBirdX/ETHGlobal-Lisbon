@@ -63,6 +63,8 @@ export interface LicenceRow {
   tx_hash: string | null;
   /** Serial of the HTS licence certificate NFT minted for this grant. */
   certificate_serial: string | null;
+  /** requestHash of the compliance attestation that admitted this buyer (gate 1). */
+  attestation_hash: string | null;
   created_at: string;
 }
 
@@ -167,11 +169,20 @@ export function openDatabase(path: string = DEFAULT_DB_PATH): Database.Database 
                          CHECK (status IN ('pending','accepted','declined','completed')),
       tx_hash            TEXT,
       certificate_serial TEXT,
+      attestation_hash   TEXT,
       created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_licences_buyer ON licences (buyer_uaid);
   `);
+
+  // Databases created before the column existed: ALTER is idempotent-by-catch,
+  // since SQLite has no ADD COLUMN IF NOT EXISTS.
+  try {
+    db.exec("ALTER TABLE licences ADD COLUMN attestation_hash TEXT");
+  } catch {
+    /* already present */
+  }
 
   return db;
 }
@@ -241,13 +252,16 @@ export function insertLicence(
     useCase: string;
     price: number;
     status?: LicenceStatus;
+    /** requestHash of the gate-1 attestation, kept with the negotiated terms. */
+    attestationHash?: string;
   },
 ): number {
   const result = db
     .prepare(
       `INSERT INTO licences
-         (track_id, buyer_uaid, shares, licence_type, territory, use_case, price, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (track_id, buyer_uaid, shares, licence_type, territory, use_case, price, status,
+          attestation_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       licence.trackId,
@@ -258,6 +272,7 @@ export function insertLicence(
       licence.useCase,
       licence.price,
       licence.status ?? "pending",
+      licence.attestationHash ?? null,
     );
   return Number(result.lastInsertRowid);
 }

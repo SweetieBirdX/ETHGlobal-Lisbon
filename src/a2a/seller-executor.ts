@@ -6,25 +6,21 @@ import {
   type ExecutionEventBus,
   type RequestContext,
 } from "@a2a-js/sdk/server";
+import { checkAvailability, UnknownTrackError } from "../data/catalog.js";
 import {
-  CohortTooSmallError,
-  getCohortInsight,
-  MIN_COHORT_SIZE,
-  normalizeDataTypes,
-} from "../data/aggregate.js";
-import {
-  insertQuery,
+  insertLicence,
   openDatabase,
-  setQueryReceipt,
-  updateQueryStatus,
-  type QueryRow,
+  reserveShares,
+  setLicenceCertificate,
+  updateLicenceStatus,
+  type LicenceRow,
 } from "../data/db.js";
 import { VALIDATION_TAG } from "../identity/attestation.js";
 import { SCORE_SUCCESS, submitFeedback } from "../identity/reputation.js";
 import { verifyBuyerIdentity } from "../identity/verify.js";
 import { logAuditEvent } from "../hedera/audit.js";
 import { createSellerClient } from "../hedera/clients.js";
-import { mintReceipt, receiptTokenId } from "../hedera/receipt.js";
+import { certificateTokenId, mintCertificate } from "../hedera/certificate.js";
 import { parsePolicy } from "../policy/parser.js";
 import type { IdentityCheck, LicenceOffer, LicencePolicy } from "../types/marketplace.js";
 import {
@@ -59,10 +55,10 @@ export type DeclineReason =
   /** The buyer asked for more shares than one licence may carry. */
   | "share_cap_exceeded"
   | "price_too_low"
-  // Legacy members still referenced by `execute` until its own rewrite:
-  | "category_mismatch"
-  | "data_type_not_permitted"
-  | "cohort_too_small"
+  /** The track has fewer shares left than the licence asks for. */
+  | "insufficient_shares"
+  /** The catalogue holds no such track. */
+  | "unknown_track"
   /** Something failed on the seller's side; the buyer is not at fault. */
   | "internal_error";
 
@@ -88,37 +84,19 @@ export interface NegotiationResult {
   decision: NegotiationDecision;
   reply: string;
   reason?: DeclineReason;
-  /** Size of the cohort the buyer would receive, when the offer is accepted. */
-  cohortSize?: number;
-  /** Data types the acceptance covers — bound into the payment URL. */
-  dataTypes?: string[];
+  /** Shares of the track still available, reported with an availability refusal. */
+  availableShares?: number;
   /**
    * The owner's floor, disclosed on a price refusal. The prose already states
-   * it ("the owner's minimum is 0.4 HBAR"); this is the same fact in a form a
-   * counter-offering agent can act on without parsing sentences. Only price
-   * refusals disclose it — a category or data-type refusal is not a matter of
-   * price, and says nothing more.
+   * it ("the rights holder's minimum is 0.5 HBAR"); this is the same fact in a
+   * form a counter-offering agent can act on without parsing sentences. Only
+   * price refusals disclose it — a licence-type or use-case refusal is not a
+   * matter of price, and says nothing more.
    */
   minPriceHbar?: number;
   /** Present only on an acceptance. */
   payment?: PaymentInstruction;
 }
-
-/** What the buyer is asking for, read off the A2A message metadata. */
-export interface Offer {
-  category?: string;
-  priceHbar?: number;
-  ageRange?: string;
-  /** Data types requested; empty/omitted means the standard aggregate. */
-  dataTypes?: string[];
-}
-
-/**
- * What the standard aggregate exposes, and therefore what an offer that names
- * no data types is implicitly asking for. A policy that permits less than this
- * pair correctly refuses default offers — the aggregate would reveal both.
- */
-export const DEFAULT_OFFER_DATA_TYPES = ["performanceScore", "sessionCount"];
 
 /**
  * The owner's policy, as typed in plain language.
@@ -190,20 +168,23 @@ export function extractText(message: Message): string {
  * buyer, so the request that gets paid for is the one that was negotiated.
  */
 export function buildPaymentInstruction(
-  activityType: string,
-  ageRange?: string,
-  queryId?: number,
-  dataTypes?: string[],
+  offer: Required<Pick<LicenceOffer, "trackId" | "shares" | "licenceType" | "useCase">> &
+    Pick<LicenceOffer, "territory">,
+  licenceId: number,
 ): PaymentInstruction {
-  const params = new URLSearchParams({ activityType });
-  if (ageRange) params.set("ageRange", ageRange);
-  // The data types are part of what was negotiated, so they are bound into the
-  // URL the same way the cohort criteria are — the x402 gate compares them
-  // against the stored acceptance, and a buyer cannot widen them afterwards.
-  if (dataTypes?.length) params.set("dataTypes", dataTypes.join(","));
+  // The negotiated terms are baked into the URL by the seller rather than left
+  // to the buyer — the x402 gate compares them against the stored acceptance,
+  // so a buyer cannot widen the licence afterwards.
+  const params = new URLSearchParams({
+    trackId: String(offer.trackId),
+    shares: String(offer.shares),
+    licenceType: offer.licenceType,
+    useCase: offer.useCase,
+  });
+  if (offer.territory) params.set("territory", offer.territory);
   // Carries the negotiation into the payment, so the seller can tie a settled
   // transaction back to the buyer and terms that were agreed.
-  if (queryId !== undefined) params.set("queryId", String(queryId));
+  params.set("licenceId", String(licenceId));
 
   return {
     url: `${X402_BASE_URL}${COHORT_INSIGHT_PATH}?${params}`,
@@ -217,84 +198,100 @@ export function buildPaymentInstruction(
 }
 
 export interface CompletedSale {
-  queryId: number;
-  buyerAgentId: string;
+  licenceId: number;
+  buyerUaid: string;
   transactionId: string;
   /** HCS sequence number of the audit entry, when the write succeeded. */
   auditSequenceNumber?: number;
-  /** ReputationRegistry index of the feedback, when the write succeeded. */
+  /** HCS sequence number of the reputation feedback, when the write succeeded. */
   feedbackIndex?: string;
   /** Set when the sale was already recorded and nothing was written again. */
   alreadyCompleted?: boolean;
-  /** HTS receipt NFT handed to the payer, when one was minted. */
-  receipt?: { serial: number; hashscanUrl: string };
+  /** HTS licence certificate NFT handed to the payer, when one was minted. */
+  certificate?: { serial: number; hashscanUrl: string };
   /** Steps that failed, so a partial completion is never reported as clean. */
   errors: string[];
 }
 
 /**
  * Everything the seller does *after* a payment settles, in order:
- * write the audit entry to HCS, publish reputation feedback about the buyer,
- * mint the receipt NFT to the account that paid, then mark the sale complete
- * in the local ledger.
+ * take the shares out of the track's capacity, write the audit entry to HCS,
+ * publish reputation feedback about the buyer, mint the licence certificate
+ * NFT to the account that paid, then mark the licence complete in the ledger.
  *
  * Each step is attempted even if an earlier one failed — a reputation outage
  * should not cost the audit trail its record — and every failure is reported
  * back rather than swallowed.
  *
- * Runs at most once per negotiation. Neither of the two Hedera writes is
- * idempotent: `giveFeedback` appends a new entry every time it is called, so a
+ * Runs at most once per negotiation. Neither of the Hedera writes is
+ * idempotent: feedback appends a new entry every time it is submitted, so a
  * sale recorded twice would rate the buyer twice for one payment.
  */
 export async function recordCompletedSale(
-  queryId: number,
+  licenceId: number,
   transactionId: string,
-  /** Account that settled the payment — where the receipt NFT goes. */
+  /** Account that settled the payment — where the certificate NFT goes. */
   payerAccountId?: string,
 ): Promise<CompletedSale> {
   const db = openDatabase();
   const errors: string[] = [];
 
   try {
-    const query = db
-      .prepare("SELECT * FROM queries WHERE id = ?")
-      .get(queryId) as QueryRow | undefined;
+    const licence = db
+      .prepare("SELECT * FROM licences WHERE id = ?")
+      .get(licenceId) as LicenceRow | undefined;
 
-    if (!query) {
-      throw new Error(`No negotiation recorded for queryId ${queryId}`);
+    if (!licence) {
+      throw new Error(`No negotiation recorded for licence ${licenceId}`);
     }
 
     // Already recorded: leave the original transaction, audit entry and rating
     // exactly as they are. A second run here would publish a second reputation
     // feedback for one payment, which is how a buyer would inflate its rating.
-    if (query.status === "completed") {
+    if (licence.status === "completed") {
       return {
-        queryId,
-        buyerAgentId: query.buyer_agent_id,
-        transactionId: query.tx_hash ?? transactionId,
+        licenceId,
+        buyerUaid: licence.buyer_uaid,
+        transactionId: licence.tx_hash ?? transactionId,
         alreadyCompleted: true,
         errors,
       };
     }
 
     const result: CompletedSale = {
-      queryId,
-      buyerAgentId: query.buyer_agent_id,
+      licenceId,
+      buyerUaid: licence.buyer_uaid,
       transactionId,
       errors,
     };
 
-    // 1. Audit trail on HCS — the public, tamper-evident record that this
-    //    exchange happened, carrying no raw data.
+    // 1. Capacity. Settlement is the moment shares actually leave the track —
+    //    reserving on acceptance would let a buyer exhaust a track by
+    //    negotiating and never paying. The WHERE-clause guard in reserveShares
+    //    is what loses a race gracefully instead of overselling.
+    if (!reserveShares(db, licence.track_id, licence.shares)) {
+      errors.push(
+        `Could not reserve ${licence.shares} shares of track ${licence.track_id} — ` +
+          "capacity was taken by a competing settlement.",
+      );
+    }
+
+    // 2. Audit trail on HCS — the public, tamper-evident record that this
+    //    exchange happened, carrying the attestation that admitted the buyer.
     const seller = createSellerClient();
     try {
       const audit = await logAuditEvent(seller, {
-        event: "data_access_completed",
-        queryId,
-        buyerAgentId: query.buyer_agent_id,
-        criteria: JSON.parse(query.criteria),
-        priceHbar: query.price,
+        event: "licence_completed",
+        licenceId,
+        buyerUaid: licence.buyer_uaid,
+        trackId: licence.track_id,
+        shares: licence.shares,
+        licenceType: licence.licence_type,
+        territory: licence.territory,
+        useCase: licence.use_case,
+        priceHbar: licence.price,
         paymentTransactionId: transactionId,
+        ...(licence.attestation_hash ? { attestationHash: licence.attestation_hash } : {}),
       });
       result.auditSequenceNumber = audit.sequenceNumber;
     } catch (error) {
@@ -303,12 +300,12 @@ export async function recordCompletedSale(
       seller.close();
     }
 
-    // 2. Reputation — the buyer paid as agreed, and the feedback cites the
+    // 3. Reputation — the buyer paid as agreed, and the feedback cites the
     //    transaction so the claim is checkable. Recorded on the HCS identity
     //    topic, keyed by the buyer's UAID.
     try {
       const feedback = await submitFeedback(
-        query.buyer_agent_id,
+        licence.buyer_uaid,
         SCORE_SUCCESS,
         transactionId,
       );
@@ -317,41 +314,39 @@ export async function recordCompletedSale(
       errors.push(`Reputation feedback failed: ${String(error).slice(0, 160)}`);
     }
 
-    // 3. Receipt NFT — one HTS token to the account that paid, tying the
-    //    payment, the audit entry and the attestation together in the buyer's
-    //    own wallet. Best-effort like the steps above; the sale stands either
+    // 4. Certificate NFT — the product's on-chain half, minted to the account
+    //    that paid. Best-effort like the steps above; the sale stands either
     //    way. The completed-guard at the top is what makes this run-once.
-    const tokenId = receiptTokenId();
+    const tokenId = certificateTokenId();
     if (!tokenId) {
-      // Not configured is not a failure — run scripts/create-receipt-token.ts
-      // to enable receipts.
+      // Not configured is not a failure — run scripts/create-licence-token.ts
+      // to enable certificates.
       console.warn(
-        `[receipt] HTS_RECEIPT_TOKEN_ID is not set — no receipt NFT for query ${queryId}`,
+        `[certificate] HTS_LICENCE_TOKEN_ID is not set — no certificate NFT for licence ${licenceId}`,
       );
     } else if (!payerAccountId) {
       console.warn(
-        `[receipt] settlement carried no payer account — no receipt NFT for query ${queryId}`,
+        `[certificate] settlement carried no payer account — no certificate NFT for licence ${licenceId}`,
       );
     } else {
       try {
-        const attestationHash = (JSON.parse(query.criteria) as { attestation?: string })
-          .attestation;
-        const minted = await mintReceipt({
+        const minted = await mintCertificate({
           tokenId,
-          queryId,
+          trackId: licence.track_id,
+          shares: licence.shares,
+          licenceType: licence.licence_type,
           buyerAccountId: payerAccountId,
           auditSequenceNumber: result.auditSequenceNumber,
-          attestationHash,
         });
-        setQueryReceipt(db, queryId, String(minted.serial));
-        result.receipt = { serial: minted.serial, hashscanUrl: minted.hashscanUrl };
+        setLicenceCertificate(db, licenceId, String(minted.serial));
+        result.certificate = { serial: minted.serial, hashscanUrl: minted.hashscanUrl };
       } catch (error) {
-        errors.push(`Receipt NFT mint failed: ${String(error).slice(0, 160)}`);
+        errors.push(`Certificate NFT mint failed: ${String(error).slice(0, 160)}`);
       }
     }
 
-    // 4. Local ledger.
-    updateQueryStatus(db, queryId, "completed", transactionId);
+    // 5. Local ledger.
+    updateLicenceStatus(db, licenceId, "completed", transactionId);
 
     return result;
   } finally {
@@ -360,26 +355,33 @@ export async function recordCompletedSale(
 }
 
 /** Reads the offer out of the message metadata the buyer client attaches. */
-export function extractOffer(message: Message): Offer {
+/** Reads the licence offer out of the message metadata the buyer client attaches. */
+export function extractOffer(message: Message): LicenceOffer {
   const metadata = message.metadata ?? {};
-  const price = metadata["offeredPriceHbar"];
-  const category = metadata["category"];
-  const ageRange = metadata["ageRange"];
-  const rawTypes = metadata["dataTypes"];
 
-  const dataTypes = Array.isArray(rawTypes)
-    ? rawTypes.filter((value): value is string => typeof value === "string")
-    : undefined;
+  const numberOf = (value: unknown): number | undefined => {
+    const parsed = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+  const stringOf = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() ? value : undefined;
 
   return {
-    category: typeof category === "string" ? category : undefined,
-    priceHbar: typeof price === "number" ? price : Number(price) || undefined,
-    ageRange: typeof ageRange === "string" ? ageRange : undefined,
-    ...(dataTypes?.length ? { dataTypes } : {}),
+    ...(numberOf(metadata["trackId"]) !== undefined
+      ? { trackId: numberOf(metadata["trackId"]) }
+      : {}),
+    ...(numberOf(metadata["shares"]) !== undefined
+      ? { shares: numberOf(metadata["shares"]) }
+      : {}),
+    ...(stringOf(metadata["licenceType"]) ? { licenceType: stringOf(metadata["licenceType"]) } : {}),
+    ...(stringOf(metadata["territory"]) ? { territory: stringOf(metadata["territory"]) } : {}),
+    ...(stringOf(metadata["useCase"]) ? { useCase: stringOf(metadata["useCase"]) } : {}),
+    ...(numberOf(metadata["offeredPriceHbar"]) !== undefined
+      ? { priceHbar: numberOf(metadata["offeredPriceHbar"]) }
+      : {}),
   };
 }
 
-/** Human wording for a data type, for refusals meant to be read aloud. */
 /** Names a use case the way the refusal sentence needs it said. */
 function describeUseCase(useCase: string): string {
   const labels: Record<string, string> = {
@@ -390,19 +392,6 @@ function describeUseCase(useCase: string): string {
     documentary: "a documentary",
   };
   return labels[useCase] ?? useCase;
-}
-
-/**
- * Matches a buyer's wording against a permitted category.
- *
- * Buyers describe what they want in their own terms ("running performance"),
- * so an exact string match would reject offers the policy actually allows.
- */
-function matchCategory(requested: string, allowed: string[]): string | undefined {
-  const needle = requested.trim().toLowerCase();
-  return allowed.find(
-    (category) => needle === category || needle.includes(category.toLowerCase()),
-  );
 }
 
 /**
@@ -596,33 +585,39 @@ export class SellerExecutor implements AgentExecutor {
       return;
     }
 
-    // Gate 3 — can this cohort actually be reported? Checking here, before the
-    // buyer is routed to the paid endpoint, is what stops them paying for a
-    // request the aggregator would refuse.
-    const activityType = matchCategory(
-      offer.category!,
-      (await getPolicy()).allowedCategories,
-    )!;
-
-    let cohortSize: number;
+    // Gate 3 — does the track still have that many shares? Checking here,
+    // before the buyer is routed to the paid endpoint, is what stops them
+    // paying for a licence the catalogue could not grant.
+    let availableShares: number;
     try {
-      const insight = await getCohortInsight({
-        activityType,
-        ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),
-      });
-      cohortSize = insight.participantCount;
-    } catch (error) {
-      if (error instanceof CohortTooSmallError) {
+      const availability = await checkAvailability(offer.trackId!, offer.shares!);
+      availableShares = availability.availableShares;
+      if (!availability.sufficient) {
         this.publishReply(
           requestContext,
           eventBus,
           {
             decision: "decline",
-            reason: "cohort_too_small",
+            reason: "insufficient_shares",
+            availableShares,
             reply:
-              `Your criteria match only ${error.matched} of the owner's records, below the minimum of ` +
-              `${MIN_COHORT_SIZE} needed to report an aggregate without exposing an individual. ` +
-              "Broaden the criteria and I will reconsider — you have not been charged.",
+              `You asked for ${availability.requestedShares / 100}% but only ` +
+              `${availability.availableShares / 100}% of this track's capacity is still available. ` +
+              "Reduce the share count and I will reconsider — you have not been charged.",
+          },
+          identity,
+        );
+        return;
+      }
+    } catch (error) {
+      if (error instanceof UnknownTrackError) {
+        this.publishReply(
+          requestContext,
+          eventBus,
+          {
+            decision: "decline",
+            reason: "unknown_track",
+            reply: `Track ${offer.trackId} is not in the catalogue. Ask for the catalogue and pick a track from it.`,
           },
           identity,
         );
@@ -632,39 +627,38 @@ export class SellerExecutor implements AgentExecutor {
     }
 
     // Record the agreed terms before handing out a payment URL, so a settled
-    // payment can be matched back to who agreed to what.
+    // payment can be matched back to who agreed to what. The attestation hash
+    // rides on the row, tying the grant to the gate-1 record that admitted
+    // this buyer.
     const db = openDatabase();
-    let queryId: number;
+    let licenceId: number;
     try {
-      queryId = insertQuery(
-        db,
+      licenceId = insertLicence(db, {
+        trackId: offer.trackId!,
         buyerUaid,
-        {
-          activityType,
-          ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),
-          // Part of the negotiated terms: the x402 gate compares these against
-          // the payment URL, so the buyer receives exactly the types agreed.
-          ...(verdict.dataTypes?.length ? { dataTypes: verdict.dataTypes } : {}),
-          // Carried on the row so the receipt NFT can reference the attestation
-          // that admitted this buyer. Extra keys here are ignored by
-          // parseCriteria, so the x402 criteria gate is unaffected — same
-          // pattern as declineReason on refused rows.
-          ...(identity.attestation
-            ? { attestation: identity.attestation.requestHash }
-            : {}),
-        },
-        offer.priceHbar!,
-        "accepted",
-      );
+        shares: offer.shares!,
+        licenceType: offer.licenceType!.trim().toLowerCase(),
+        territory: offer.territory?.trim().toLowerCase() || "worldwide",
+        useCase: offer.useCase!.trim().toLowerCase(),
+        price: offer.priceHbar!,
+        status: "accepted",
+        ...(identity.attestation
+          ? { attestationHash: identity.attestation.requestHash }
+          : {}),
+      });
     } finally {
       db.close();
     }
 
     const payment = buildPaymentInstruction(
-      activityType,
-      offer.ageRange,
-      queryId,
-      verdict.dataTypes,
+      {
+        trackId: offer.trackId!,
+        shares: offer.shares!,
+        licenceType: offer.licenceType!.trim().toLowerCase(),
+        useCase: offer.useCase!.trim().toLowerCase(),
+        ...(offer.territory ? { territory: offer.territory.trim().toLowerCase() } : {}),
+      },
+      licenceId,
     );
 
     this.publishReply(
@@ -672,12 +666,12 @@ export class SellerExecutor implements AgentExecutor {
       eventBus,
       {
         ...verdict,
-        cohortSize,
+        availableShares,
         payment,
         reply:
-          `${verdict.reply} Cohort: ${cohortSize} participants. ` +
+          `${verdict.reply} ` +
           `Pay ${payment.priceHbar} HBAR (${payment.priceTinybar} tinybar, asset ${payment.asset}) ` +
-          `on ${payment.network} and ${payment.method} ${payment.url} — the same request returns the aggregate once settled.`,
+          `on ${payment.network} and ${payment.method} ${payment.url} — the same request returns the licence grant once settled.`,
       },
       identity,
     );
@@ -691,29 +685,36 @@ export class SellerExecutor implements AgentExecutor {
    * bookkeeping failure must never change the answer the buyer receives.
    */
   private recordDecline(
-    buyerAgentId: string,
-    offer: Offer,
-    reason?: DeclineReason,
+    buyerUaid: string,
+    offer: LicenceOffer,
+    _reason?: DeclineReason,
   ): void {
-    if (!offer.category || offer.priceHbar === undefined || Number.isNaN(offer.priceHbar)) {
+    // Only offers complete enough to have been judged on their merits are
+    // kept — a malformed message is not a decision the rights holder made.
+    if (
+      offer.trackId === undefined ||
+      offer.shares === undefined ||
+      !offer.licenceType ||
+      !offer.useCase ||
+      offer.priceHbar === undefined ||
+      Number.isNaN(offer.priceHbar)
+    ) {
       return;
     }
 
     try {
       const db = openDatabase();
       try {
-        insertQuery(
-          db,
-          buyerAgentId,
-          {
-            activityType: offer.category,
-            ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),
-            ...(offer.dataTypes?.length ? { dataTypes: offer.dataTypes } : {}),
-            ...(reason ? { declineReason: reason } : {}),
-          },
-          offer.priceHbar,
-          "declined",
-        );
+        insertLicence(db, {
+          trackId: offer.trackId,
+          buyerUaid,
+          shares: offer.shares,
+          licenceType: offer.licenceType.trim().toLowerCase(),
+          territory: offer.territory?.trim().toLowerCase() || "worldwide",
+          useCase: offer.useCase.trim().toLowerCase(),
+          price: offer.priceHbar,
+          status: "declined",
+        });
       } finally {
         db.close();
       }
@@ -765,7 +766,9 @@ export class SellerExecutor implements AgentExecutor {
         decision: result.decision,
         ...(result.reason ? { reason: result.reason } : {}),
         ...(result.minPriceHbar !== undefined ? { minPriceHbar: result.minPriceHbar } : {}),
-        ...(result.cohortSize !== undefined ? { cohortSize: result.cohortSize } : {}),
+        ...(result.availableShares !== undefined
+          ? { availableShares: result.availableShares }
+          : {}),
         // The buyer agent pays straight from this, without reading the prose.
         ...(result.payment ? { payment: result.payment } : {}),
         identityVerified: identity?.verified ?? false,
