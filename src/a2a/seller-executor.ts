@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { ZeroAddress } from "ethers";
 import { Role, TaskState, type Message, type Part } from "@a2a-js/sdk";
 import {
   AgentEvent,
@@ -20,19 +19,14 @@ import {
   updateQueryStatus,
   type QueryRow,
 } from "../data/db.js";
-import { identityRegistry } from "../erc8004/contracts.js";
-import { SCORE_SUCCESS, submitFeedback } from "../erc8004/feedback.js";
-import { fromDataUri } from "../erc8004/registration-files.js";
-import {
-  attestCompliance,
-  VALIDATION_TAG,
-  type Attestation,
-} from "../erc8004/validation.js";
+import { VALIDATION_TAG } from "../identity/attestation.js";
+import { SCORE_SUCCESS, submitFeedback } from "../identity/reputation.js";
+import { verifyBuyerIdentity } from "../identity/verify.js";
 import { logAuditEvent } from "../hedera/audit.js";
 import { createSellerClient } from "../hedera/clients.js";
 import { mintReceipt, receiptTokenId } from "../hedera/receipt.js";
 import { parsePolicy } from "../policy/parser.js";
-import type { LicenceOffer, LicencePolicy } from "../types/marketplace.js";
+import type { IdentityCheck, LicenceOffer, LicencePolicy } from "../types/marketplace.js";
 import {
   COHORT_INSIGHT_PATH,
   COHORT_INSIGHT_PRICE_HBAR,
@@ -46,7 +40,8 @@ import {
  * The seller agent's negotiation logic.
  *
  * An offer passes through three gates in order, and each one can only ever
- * narrow what happens next: is the buyer who they say they are (ERC-8004), does
+ * narrow what happens next: is the buyer who they say they are (HCS identity
+ * registry), does
  * the owner's policy permit this sale, and can the cohort be reported without
  * exposing an individual. No human is involved in any of them.
  */
@@ -270,7 +265,7 @@ export async function recordCompletedSale(
     }
 
     // Already recorded: leave the original transaction, audit entry and rating
-    // exactly as they are. A second run here would publish a second ERC-8004
+    // exactly as they are. A second run here would publish a second reputation
     // feedback for one payment, which is how a buyer would inflate its rating.
     if (query.status === "completed") {
       return {
@@ -309,14 +304,15 @@ export async function recordCompletedSale(
     }
 
     // 2. Reputation — the buyer paid as agreed, and the feedback cites the
-    //    transaction so the claim is checkable.
+    //    transaction so the claim is checkable. Recorded on the HCS identity
+    //    topic, keyed by the buyer's UAID.
     try {
       const feedback = await submitFeedback(
         query.buyer_agent_id,
         SCORE_SUCCESS,
         transactionId,
       );
-      result.feedbackIndex = feedback.feedbackIndex;
+      result.feedbackIndex = String(feedback.sequenceNumber);
     } catch (error) {
       errors.push(`Reputation feedback failed: ${String(error).slice(0, 160)}`);
     }
@@ -505,117 +501,11 @@ export function evaluateOffer(
   };
 }
 
-export interface IdentityCheck {
-  verified: boolean;
-  /** Why the check failed, for the reply and the audit trail. */
-  reason: string;
-  /** Wallet the registry has on file, when the identity exists. */
-  wallet?: string;
-  /** Agent name from the on-chain registration file. */
-  name?: string;
-  /** Compliance attestation recorded on Hedera, when one was written. */
-  attestation?: Attestation;
-}
-
-/**
- * Checks a buyer against the ERC-8004 IdentityRegistry before negotiating.
- *
- * Three separate questions, in order: does this identity exist on-chain, has
- * its owner retired it, and is it one the data owner has agreed to sell to.
- */
-export async function verifyBuyerIdentity(
-  agentId: string,
-): Promise<IdentityCheck> {
-  if (!/^\d+$/.test(agentId)) {
-    return { verified: false, reason: `"${agentId}" is not a valid agent id` };
-  }
-
-  // Returns the zero address for an id that was never minted, rather than
-  // reverting the way ownerOf does.
-  let wallet: string;
-  try {
-    wallet = await identityRegistry.getAgentWallet!(agentId);
-  } catch (error) {
-    // The registry being unreachable is not evidence the buyer is honest, so
-    // this fails closed — but it says so, rather than blaming the buyer.
-    return {
-      verified: false,
-      reason: `the ERC-8004 registry could not be reached, so agent ${agentId} cannot be verified right now (${String(error).slice(0, 100)})`,
-    };
-  }
-
-  if (wallet === ZeroAddress) {
-    return {
-      verified: false,
-      reason: `agent ${agentId} is not registered in the ERC-8004 IdentityRegistry`,
-    };
-  }
-
-  let name: string | undefined;
-  try {
-    const file = fromDataUri(await identityRegistry.tokenURI!(agentId));
-    name = file.name;
-    if (!file.active) {
-      return {
-        verified: false,
-        reason: `agent ${agentId} ("${file.name}") is marked inactive`,
-        wallet,
-        name,
-      };
-    }
-  } catch (error) {
-    // An unreadable registration file is not proof of bad faith, but it is not
-    // something to trade on either.
-    return {
-      verified: false,
-      reason: `agent ${agentId} has an unreadable registration file (${String(error).slice(0, 80)})`,
-      wallet,
-    };
-  }
-
-  // Compliance attestation. Recorded on Hedera rather than the ERC-8004
-  // ValidationRegistry, which has no deployment on any chain yet — see
-  // src/erc8004/validation.ts. Deliberately after the checks above: attesting an
-  // agent that was never minted would be recording a verdict about nothing.
-  let attestation: Attestation;
-  try {
-    attestation = await attestCompliance(agentId);
-  } catch (error) {
-    // An attestation that could not be written is not an attestation. Failing
-    // closed here means an outage costs a sale; failing open would mean an
-    // outage silently removed the check.
-    return {
-      verified: false,
-      reason:
-        `agent ${agentId} ("${name}") could not be attested — the compliance record could not be ` +
-        `written to Hedera, so no sale can be authorised right now (${String(error).slice(0, 90)})`,
-      wallet,
-      name,
-    };
-  }
-
-  if (!attestation.compliant) {
-    return {
-      verified: false,
-      reason:
-        `agent ${agentId} ("${name}") holds no compliance attestation for health data ` +
-        `(scored ${attestation.response}, recorded on Hedera as ${attestation.requestHash.slice(0, 18)}…)`,
-      wallet,
-      name,
-      attestation,
-    };
-  }
-
-  return {
-    verified: true,
-    reason:
-      `agent ${agentId} ("${name}") is registered, active and attested ` +
-      `(scored ${attestation.response}, recorded on Hedera as ${attestation.requestHash.slice(0, 18)}…)`,
-    wallet,
-    name,
-    attestation,
-  };
-}
+// Gate 1 itself lives in src/identity/verify.ts: four checks against the HCS
+// identity registry, each failing closed, imported above. Re-exported so the
+// tests that exercise the gate through the executor keep one import path.
+export { verifyBuyerIdentity };
+export type { IdentityCheck };
 
 export class SellerExecutor implements AgentExecutor {
   async execute(
@@ -665,22 +555,22 @@ export class SellerExecutor implements AgentExecutor {
     requestContext: RequestContext,
     eventBus: ExecutionEventBus,
   ): Promise<void> {
-    const buyerAgentId = requestContext.userMessage.metadata?.["buyerAgentId"];
+    const buyerUaid = requestContext.userMessage.metadata?.["buyerUaid"];
 
     // Gate 1 — identity. An unidentified or unverified buyer never reaches the
     // policy, so no offer from one can be accepted.
-    if (typeof buyerAgentId !== "string" && typeof buyerAgentId !== "number") {
+    if (typeof buyerUaid !== "string") {
       this.publishReply(requestContext, eventBus, {
         decision: "decline",
         reason: "identity_unverified",
         reply:
-          "Identify yourself before making an offer: include your ERC-8004 agentId as `buyerAgentId` " +
-          "in the message metadata so I can verify you against the IdentityRegistry.",
+          "Identify yourself before making an offer: include your UAID as `buyerUaid` " +
+          "in the message metadata so I can verify you against the identity registry.",
       });
       return;
     }
 
-    const identity = await verifyBuyerIdentity(String(buyerAgentId));
+    const identity = await verifyBuyerIdentity(buyerUaid);
     if (!identity.verified) {
       this.publishReply(
         requestContext,
@@ -701,7 +591,7 @@ export class SellerExecutor implements AgentExecutor {
     if (verdict.decision === "decline") {
       // Refusals are recorded too: what the agent turned down on the owner's
       // behalf is as much a part of the story as what it sold.
-      this.recordDecline(String(buyerAgentId), offer, verdict.reason);
+      this.recordDecline(buyerUaid, offer, verdict.reason);
       this.publishReply(requestContext, eventBus, verdict, identity);
       return;
     }
@@ -748,7 +638,7 @@ export class SellerExecutor implements AgentExecutor {
     try {
       queryId = insertQuery(
         db,
-        String(buyerAgentId),
+        buyerUaid,
         {
           activityType,
           ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),

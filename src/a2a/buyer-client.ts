@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Role, type Message, type Part, type SendMessageResult } from "@a2a-js/sdk";
 import { ClientFactory } from "@a2a-js/sdk/client";
-import { getBuyerAgentId } from "../erc8004/agent-ids.js";
+import { getBuyerUaid } from "../identity/agent-ids.js";
 import type { LicenceOffer } from "../types/marketplace.js";
 import { payAndFetch, type PayAndFetchResult } from "../x402/pay.js";
 import { SELLER_AGENT_URL } from "./seller-agent-card.js";
@@ -158,9 +158,9 @@ export async function sendNegotiationMessage(
     taskId: session?.taskId ?? "",
     role: Role.ROLE_USER,
     parts: [textPart(text)],
-    // The buyer names its ERC-8004 identity on every message; the seller looks
-    // it up in the registry before deciding whether to deal (Phase 5.4).
-    metadata: { buyerAgentId: getBuyerAgentId(), ...metadata },
+    // The buyer names its UAID on every message; the seller resolves it in the
+    // HCS identity registry before deciding whether to deal (gate 1).
+    metadata: { buyerUaid: getBuyerUaid(), ...metadata },
     extensions: [],
     referenceTaskIds: [],
   };
