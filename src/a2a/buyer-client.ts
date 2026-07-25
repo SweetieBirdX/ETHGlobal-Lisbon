@@ -1,0 +1,137 @@
+import { randomUUID } from "node:crypto";
+import { Role, type Message, type Part, type SendMessageResult } from "@a2a-js/sdk";
+import { ClientFactory } from "@a2a-js/sdk/client";
+import { SELLER_AGENT_URL } from "./seller-agent-card.js";
+
+/**
+ * The research company's buyer agent.
+ *
+ * It knows one thing about the seller: a base URL. Everything else — which
+ * transport to use, which protocol version, where the JSON-RPC endpoint lives —
+ * comes from the agent card the factory downloads, which is what makes this an
+ * agent-to-agent interaction rather than two halves of one program.
+ */
+
+/** Base URL of the seller agent, derived from the endpoint it advertises. */
+export const SELLER_BASE_URL = new URL(SELLER_AGENT_URL).origin;
+
+/** What the buyer wants to buy access to. */
+export interface DataCriteria {
+  /** Fitness data category, e.g. "running performance". */
+  category: string;
+  /** Age band of the cohort, e.g. "25-34". */
+  ageRange?: string;
+  /** How many participants the buyer wants in the aggregate. */
+  cohortSize?: number;
+}
+
+export interface NegotiationResponse {
+  /** `"accept"` or `"decline"` as reported by the seller, when it said. */
+  decision?: string;
+  /** The seller's reply in plain text. */
+  reply: string;
+  /** Untouched result, for callers that need the task/message details. */
+  raw: SendMessageResult;
+}
+
+function textPart(value: string): Part {
+  return {
+    content: { $case: "text", value },
+    metadata: undefined,
+    filename: "",
+    mediaType: "text/plain",
+  };
+}
+
+/** Renders the offer as the sentence a human buyer would have written. */
+export function formatOffer(criteria: DataCriteria, offeredPrice: number): string {
+  const details = [
+    `category: ${criteria.category}`,
+    criteria.ageRange ? `age range: ${criteria.ageRange}` : undefined,
+    criteria.cohortSize ? `cohort size: ${criteria.cohortSize}` : undefined,
+  ].filter(Boolean);
+
+  return (
+    `We would like access to an anonymised cohort aggregate (${details.join(", ")}). ` +
+    `Our offered price is ${offeredPrice} HBAR, payable immediately on acceptance.`
+  );
+}
+
+/**
+ * The seller may answer with a bare `Message` or with a `Task` carrying the
+ * message in its status — this reads either without the caller caring which.
+ */
+function responseMessage(result: SendMessageResult): Message | undefined {
+  return "parts" in result ? result : result.status?.message;
+}
+
+/** Pulls the reply text out of whatever the seller returned. */
+function extractReply(result: SendMessageResult): string {
+  const parts = responseMessage(result)?.parts ?? [];
+  return parts
+    .map((part) => (part.content?.$case === "text" ? part.content.value : ""))
+    .join(" ")
+    .trim();
+}
+
+function extractDecision(result: SendMessageResult): string | undefined {
+  const decision = responseMessage(result)?.metadata?.["decision"];
+  return typeof decision === "string" ? decision : undefined;
+}
+
+/**
+ * Sends arbitrary text to the seller agent.
+ *
+ * Useful for the messages a negotiation opens with before there is an offer on
+ * the table ("what do you have?"), and for exercising the seller's rejection
+ * path, which a fully-formed offer never reaches.
+ */
+export async function sendNegotiationMessage(
+  text: string,
+  metadata?: Record<string, unknown>,
+  baseUrl: string = SELLER_BASE_URL,
+): Promise<NegotiationResponse> {
+  const factory = new ClientFactory();
+  // Reads /.well-known/agent-card.json and picks a transport from the card.
+  const client = await factory.createFromUrl(baseUrl);
+
+  const message: Message = {
+    messageId: randomUUID(),
+    contextId: "",
+    taskId: "",
+    role: Role.ROLE_USER,
+    parts: [textPart(text)],
+    metadata,
+    extensions: [],
+    referenceTaskIds: [],
+  };
+
+  const raw = await client.sendMessage({
+    tenant: "",
+    message,
+    configuration: undefined,
+    metadata: undefined,
+  });
+
+  return { decision: extractDecision(raw), reply: extractReply(raw), raw };
+}
+
+/**
+ * Opens a negotiation with the seller agent and returns its answer.
+ *
+ * @param criteria what cohort the buyer wants
+ * @param offeredPrice price in HBAR the buyer is willing to pay
+ */
+export async function sendNegotiationRequest(
+  criteria: DataCriteria,
+  offeredPrice: number,
+  baseUrl: string = SELLER_BASE_URL,
+): Promise<NegotiationResponse> {
+  return sendNegotiationMessage(
+    formatOffer(criteria, offeredPrice),
+    // Sent alongside the prose so the seller can act on exact numbers rather
+    // than parsing them back out of the sentence.
+    { offeredPriceHbar: offeredPrice, ...criteria },
+    baseUrl,
+  );
+}

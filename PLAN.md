@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 4 — A2A Agent Skeleton (4.1-4.3 done). Next: 4.4 — buyer agent client.
+**Active phase:** Phase 4 — A2A Agent Skeleton **complete** (4.1-4.5 done). Next: Phase 5.1 — ERC-8004 contract connections.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -47,8 +47,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 4.1 Seller AgentCard
 - [x] 4.2 Seller executor (basic version)
 - [x] 4.3 Seller agent server
-- [ ] 4.4 Buyer agent client
-- [ ] 4.5 End-to-end negotiation test
+- [x] 4.4 Buyer agent client
+- [x] 4.5 End-to-end negotiation test
 
 ### Phase 5 — ERC-8004
 - [ ] 5.1 Contract connections
@@ -104,6 +104,38 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (17)
+**Completed:** Phase 4.5 — **Phase 4 is done**
+**Files changed:** `scripts/test-negotiation.ts` (new) — checks the seller is reachable (clear "start it with …" error if not), then runs an accept scenario via `sendNegotiationRequest({ category: "running performance", ageRange: "25-34", cohortSize: 400 }, 0.5)` and a reject scenario via `sendNegotiationMessage("…What fitness data categories can you give us access to?")`, printing expected vs actual and exiting 1 on any mismatch. `src/a2a/buyer-client.ts` — extracted `sendNegotiationMessage(text, metadata?, baseUrl?)` and made `sendNegotiationRequest` a thin wrapper over it, so the reject path is reachable through the buyer client instead of hand-rolled JSON-RPC in the test.
+**Verification:** `npx tsc --noEmit` clean. Server started separately, then `npx tsx scripts/test-negotiation.ts`:
+```
+OK   accept: priced offer for a running-performance cohort   -> accept
+OK   reject: enquiry with no price attached                  -> decline
+2/2 scenarios passed
+```
+Exit code 0. Also confirmed the test is capable of failing rather than passing vacuously: a copy with a deliberately wrong expectation exited **1**, and running with no server up exited **1**.
+**What the next person should do:** Phase 5.1 — ERC-8004 contract connections (`ethers`, registries at the fixed addresses in `CLAUDE.md`, ABIs from the erc-8004/erc-8004-contracts repo).
+**Known issues / things to watch for:**
+- The script deliberately does **not** start the server (per the prompt) — it fails fast with instructions instead. Phase 7.4's full end-to-end script should own the lifecycle itself using `createSellerApp()`.
+- Both scenarios still exercise the 4.2 placeholder keyword logic. Once 6.5 lands, the "reject" case should become a *priced* offer that the owner's policy turns down (price too low / wrong category) — the current no-price rejection is a weaker test and should be upgraded then.
+
+### 2026-07-25 — Emre — Claude Code session (16)
+**Completed:** Phase 4.4
+**Files changed:** `src/a2a/buyer-client.ts` (new) — `sendNegotiationRequest(criteria, offeredPrice, baseUrl?)` does `new ClientFactory().createFromUrl(SELLER_BASE_URL)`, builds a `Role.ROLE_USER` message from `formatOffer(...)`, calls `client.sendMessage(...)` and returns `{ decision, reply, raw }`. Also exports `DataCriteria`, `formatOffer` and `SELLER_BASE_URL`.
+**Verification:** `npx tsc --noEmit` clean. Started the 4.3 server, then ran the client against it — the client was given **only the base URL** and discovered the JSON-RPC endpoint from the card:
+```
+offer text: We would like access to an anonymised cohort aggregate (category: running performance, age range: 25-34, cohort size: 400). Our offered price is 0.5 HBAR, payable immediately on acceptance.
+decision: accept
+reply:    Offer accepted. The cohort aggregate is available from the paid endpoint; settle the x402 payment and the data…
+```
+Exit code 0. Server stopped, throwaway deleted.
+**What the next person should do:** Phase 4.5 — the end-to-end negotiation test: start the server via `createSellerApp()` (it does not self-listen when imported), run both an accepted and a declined negotiation, assert on `decision`, shut the server down.
+**Known issues / things to watch for:**
+- `SELLER_BASE_URL` is derived from `SELLER_AGENT_URL`'s origin, so the buyer never hard-codes port 4000 — consistent with how the server derives its own port.
+- **Every offer `formatOffer` produces contains the word "price", so the 4.2 placeholder logic accepts all of them.** The decline path can only be exercised by sending raw text (as the 4.2 verification did). Real discrimination arrives with the policy engine in 6.5 — until then don't read "accept" as the policy working.
+- `sendMessage` can return either a `Message` or a `Task` (`SendMessageResult` is a union). The helpers read the reply from `result.parts` or `result.status.message` accordingly — note it is `status.message`, not `status.update`.
+- The offer's structured fields (`offeredPriceHbar`, category, age range, cohort size) are duplicated into `message.metadata` so Phases 5-7 can act on exact numbers instead of re-parsing the sentence.
 
 ### 2026-07-25 — Emre — Claude Code session (15)
 **Completed:** Phase 4.3
