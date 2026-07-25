@@ -20,7 +20,11 @@ import {
  *
  *   npx tsx scripts/test-error-cases.ts
  *
- * Spends no HBAR: every scenario fails before a payment is signed.
+ * Pays for no data: every scenario fails before a payment for a cohort is
+ * signed. It is no longer strictly free — the two agent ids that exist on-chain
+ * (`103`, and the live-seller cases) reach gate 1, which writes a compliance
+ * attestation pair to HCS. That is a fraction of a cent in fees, not the 0.5 ℏ
+ * a purchase costs.
  */
 
 const checks: [string, boolean, string][] = [];

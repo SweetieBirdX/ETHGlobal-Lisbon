@@ -11,6 +11,7 @@ import { verifyBuyerIdentity } from "../src/a2a/seller-executor.js";
 import { parsePolicy } from "../src/policy/parser.js";
 import { COHORT_INSIGHT_PATH, X402_BASE_URL } from "../src/x402/config.js";
 import { startX402Server } from "../src/x402/server.js";
+import { countTopicEvents } from "../src/hedera/mirror.js";
 import {
   assertSufficientBalance,
   EndpointUnreachableError,
@@ -43,6 +44,9 @@ import {
 
 const E2E_SCRIPT = "scripts/full-e2e-test.ts";
 
+/** The audit entry a completed sale writes. */
+const SALE_EVENT = "data_access_completed";
+
 /** How long to keep asking the mirror node before calling a delta missing. */
 const DELTA_TIMEOUT_MS = 60_000;
 const DELTA_POLL_MS = 5_000;
@@ -64,18 +68,18 @@ function record(group: string, label: string, passed: boolean, detail = ""): voi
 
 const sellerWallet = createSellerWallet();
 const buyerAgentId = getBuyerAgentId();
-const topicId = process.env.HCS_AUDIT_TOPIC_ID;
 
 /* ------------------------------------------------------------------ counters */
 
-async function hcsSequence(): Promise<number> {
-  if (!topicId) throw new Error("HCS_AUDIT_TOPIC_ID is not set");
-  const response = await fetch(
-    `https://testnet.mirrornode.hedera.com/api/v1/topics/${topicId}/messages?order=desc&limit=1`,
-  );
-  const body = (await response.json()) as { messages?: { sequence_number: number }[] };
-  return body.messages?.[0]?.sequence_number ?? 0;
-}
+/**
+ * Sale records on the audit topic.
+ *
+ * Counted by event, not by sequence number: gate 1 now writes a compliance
+ * attestation pair per negotiation to the same topic, so a raw sequence delta
+ * would count attestations as sales and the "+1 per run" assertion below would
+ * be measuring the wrong thing.
+ */
+const saleEntries = (): Promise<number> => countTopicEvents(SALE_EVENT);
 
 async function feedbackCount(): Promise<number> {
   const summary = await reputationRegistry.getSummary!(
@@ -113,14 +117,14 @@ function latestCompleted(): QueryRow | undefined {
 
 interface Snapshot {
   completed: number;
-  hcs: number;
+  sales: number;
   feedback: number;
 }
 
 async function snapshot(): Promise<Snapshot> {
   return {
     completed: countCompleted(),
-    hcs: await hcsSequence(),
+    sales: await saleEntries(),
     feedback: await feedbackCount(),
   };
 }
@@ -192,7 +196,7 @@ async function repeatedRuns(): Promise<void> {
 
   let before = await snapshot();
   console.log(
-    `  baseline: completed=${before.completed} hcsSeq=${before.hcs} feedback=${before.feedback}`,
+    `  baseline: completed=${before.completed} saleEntries=${before.sales} feedback=${before.feedback}`,
   );
 
   for (const run of [1, 2]) {
@@ -202,7 +206,7 @@ async function repeatedRuns(): Promise<void> {
     record(group, `${E2E_SCRIPT} exited cleanly (run ${run})`, code === 0, summary);
 
     const completed = await waitForIncrease(countCompleted, before.completed);
-    const hcs = await waitForIncrease(hcsSequence, before.hcs);
+    const sales = await waitForIncrease(saleEntries, before.sales);
     const feedback = await waitForIncrease(feedbackCount, before.feedback);
 
     record(
@@ -213,9 +217,9 @@ async function repeatedRuns(): Promise<void> {
     );
     record(
       group,
-      `a new message landed on the HCS topic (run ${run})`,
-      hcs > before.hcs,
-      `sequence ${before.hcs} → ${hcs}`,
+      `a new sale entry landed on the HCS topic (run ${run})`,
+      sales > before.sales,
+      `sale entries ${before.sales} → ${sales}`,
     );
     record(
       group,
@@ -229,9 +233,9 @@ async function repeatedRuns(): Promise<void> {
       group,
       `exactly one sale, one audit entry and one rating (run ${run})`,
       completed === before.completed + 1 &&
-        hcs === before.hcs + 1 &&
+        sales === before.sales + 1 &&
         feedback === before.feedback + 1,
-      `deltas: completed +${completed - before.completed}, hcs +${hcs - before.hcs}, feedback +${feedback - before.feedback}`,
+      `deltas: completed +${completed - before.completed}, sales +${sales - before.sales}, feedback +${feedback - before.feedback}`,
     );
 
     const row = latestCompleted();
@@ -242,7 +246,7 @@ async function repeatedRuns(): Promise<void> {
       `query #${row?.id} buyer ${row?.buyer_agent_id} tx ${row?.tx_hash}`,
     );
 
-    before = { completed, hcs, feedback };
+    before = { completed, sales, feedback };
   }
 }
 

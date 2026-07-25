@@ -8,9 +8,11 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 9 — Documentation and Demo (9.1 done). Next: 9.2 — bonus requirement coverage table.
+**Active phase:** Phase 9 — Documentation and Demo (9.1, 9.2 done). Next: 9.3 — demo script (`docs/` is still empty).
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
+
+> **Session 42 — read this before touching ERC-8004:** the **ValidationRegistry has no deployment on any chain** (spec section still under revision with the TEE community), so there is no address to call and none to find. The compliance attestation is recorded on **HCS** instead, using the registry's field names — `npm run test:validation`, 22/22. Consequence: the audit topic now carries attestations as well as sales, so **never assert on it by sequence delta** — use `countTopicEvents(event)` from `src/hedera/mirror.ts`.
 
 > **Session 40:** Phase 7 re-verified end to end with `npm run verify:phase7` — **24/24**, proving the flow is repeatable (every counter increases by exactly one per run) and every failure mode is survivable. `scripts/full-e2e-test.ts` had been failing 16/17 since session 36 and is fixed, now **18/18**.
 >
@@ -84,7 +86,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ### Phase 9 — Documentation and Demo
 - [x] 9.1 README architecture section
-- [ ] 9.2 Bonus requirement coverage table
+- [x] 9.2 Bonus requirement coverage table — *written in session 42; rows derived from `CLAUDE.md`, not from an official ETHGlobal checklist (we don't have one). Revisit if the real criteria surface.*
 - [ ] 9.3 Demo script
 - [ ] 9.4 Clean-environment setup test
 - [ ] Manual: demo video filmed
@@ -108,6 +110,22 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (42)
+**Completed:** The compliance attestation is now a real, publicly readable record instead of a local list check — **and Phase 9.2**, the requirement coverage table.
+**Files changed:** `src/erc8004/validation.ts` (**new**), `src/hedera/mirror.ts` (**new**). `src/a2a/seller-executor.ts` — gate 1 writes a real attestation pair; `IdentityCheck.attestation`; the verdict is echoed in the reply metadata. `src/web/api.ts` — the panel renders attestations legibly. `scripts/test-validation.ts` (**new**). `scripts/full-e2e-test.ts`, `scripts/verify-phase7.ts` — count **sale events**, not topic sequence. `scripts/test-error-cases.ts` — cost note corrected. `package.json`, `README.md`.
+**The headline finding: the ERC-8004 ValidationRegistry cannot be used, because it is not deployed anywhere.** The official deployment list covers only the Identity and Reputation registries on every chain including Hedera Testnet; the validation section of the spec is still under active revision with the TEE community. `abis/ValidationRegistry.json` is a bare interface — no bytecode, no address. This was checked before writing any code: `eth_getCode` confirms the two known registries have code, and no third address exists to point at. The `validationRequest`/`validationResponse` signatures were correct; there was simply nothing to call. **Do not spend time looking for the address — it does not exist yet.**
+**What was built instead (decision made with the owner):** the attestation is recorded on **HCS**, one `validation_request` / `validation_response` pair per negotiation, using the registry's exact field names so a future migration is a substrate swap. Decision rule unchanged (`getApprovedAgentIds()` → 100, else 0). Fails **closed**: an attestation that cannot be written means the buyer is not attested.
+**Verification:** `npx tsc --noEmit` clean. `npm run test:validation` → **22/22**. Approved buyer 104 → score 100, two distinct tx ids (`0.0.9696085@1784979226.528531513` / `…1784979228.017651598`), and the pair **read back off the mirror node** with matching `requestHash` `0xc6f2cc21…` and the ValidationRegistry field names present. Unapproved agent 103 → a genuine **score-0** attestation written and then refused. Unminted `999999999` → refused with **nothing written**. The buyer receives the attestation in the reply metadata, so it can check the verdict itself. Regressions: `npm run test:errors` **17/17**, `npm run verify:phase7` **24/24** (e2e 18/18 twice inside it).
+**What the next person should do:** Phase 9.3 — the demo script. `docs/` is still empty. The attestation is worth 20 seconds of the video: show agent 103 being refused and then pull the score-0 record off HashScan.
+**Known issues / things to watch for:**
+- **Never assert on the HCS topic by sequence delta again.** The topic now carries attestations as well as sales, so "+1" no longer means "one sale". Both test scripts use `countTopicEvents("data_access_completed")` from the new `src/hedera/mirror.ts`. Anything new that counts the topic must filter by event too.
+- **Every negotiation now writes two HCS messages, including refusals.** That was the explicit choice (one pair per negotiation). It costs a fraction of a cent, but `test-error-cases.ts` is no longer strictly free and the README no longer claims a refusal writes nothing.
+- **The audit panel is noisier** — two attestation messages per negotiation against one per sale, in a view showing the last 25. Entries are labelled (`validation_response — agent #104 · score 100`) so they read clearly, but if it crowds the sales during the demo, a dedicated `HCS_VALIDATION_TOPIC_ID` is a one-line change: `logAuditEvent(client, message, topicId)` already takes a topic per call.
+- **Self-attestation is not third-party verification and the README says so twice** — in the ERC-8004 section and in the coverage table, where both the missing registry and the non-independent validator are listed as stand-ins rather than glossed. A judge who knows the standard will ask; the honest answer is stronger than a vague one.
+- Gate 1 is now ~4 s slower per negotiation (two HCS round trips). Noticeable in the panel's live log, harmless in tests.
+- Phase 9.2's table is built from `CLAUDE.md`'s component list because **we have no official ETHGlobal bonus checklist**. If the real criteria exist, the rows should be re-checked against them.
+- Still open from the audit: **`allowedDataTypes` parsed and shown but never enforced**; earnings total sums the negotiated price rather than the 0.5 ℏ charged; `create-audit-topic.ts` has no `FORCE` guard despite the README saying it does; `vitest` and `@langchain/openai` declared but unused.
 
 ### 2026-07-25 — Emre — Claude Code session (41)
 **Completed:** `npm test` fixed — it pointed at `vitest run` with no test files in the repo, so it exited 1 every time.

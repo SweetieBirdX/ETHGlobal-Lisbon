@@ -18,10 +18,14 @@ import {
   updateQueryStatus,
   type QueryRow,
 } from "../data/db.js";
-import { getApprovedAgentIds } from "../erc8004/agent-ids.js";
 import { identityRegistry } from "../erc8004/contracts.js";
 import { SCORE_SUCCESS, submitFeedback } from "../erc8004/feedback.js";
 import { fromDataUri } from "../erc8004/registration-files.js";
+import {
+  attestCompliance,
+  VALIDATION_TAG,
+  type Attestation,
+} from "../erc8004/validation.js";
 import { logAuditEvent } from "../hedera/audit.js";
 import { createSellerClient } from "../hedera/clients.js";
 import { parsePolicy, type DataPolicy } from "../policy/parser.js";
@@ -368,6 +372,8 @@ export interface IdentityCheck {
   wallet?: string;
   /** Agent name from the on-chain registration file. */
   name?: string;
+  /** Compliance attestation recorded on Hedera, when one was written. */
+  attestation?: Attestation;
 }
 
 /**
@@ -426,22 +432,47 @@ export async function verifyBuyerIdentity(
     };
   }
 
-  // Stands in for a ValidationRegistry compliance attestation — see
-  // getApprovedAgentIds().
-  if (!getApprovedAgentIds().includes(agentId)) {
+  // Compliance attestation. Recorded on Hedera rather than the ERC-8004
+  // ValidationRegistry, which has no deployment on any chain yet — see
+  // src/erc8004/validation.ts. Deliberately after the checks above: attesting an
+  // agent that was never minted would be recording a verdict about nothing.
+  let attestation: Attestation;
+  try {
+    attestation = await attestCompliance(agentId);
+  } catch (error) {
+    // An attestation that could not be written is not an attestation. Failing
+    // closed here means an outage costs a sale; failing open would mean an
+    // outage silently removed the check.
     return {
       verified: false,
-      reason: `agent ${agentId} ("${name}") holds no compliance attestation for health data`,
+      reason:
+        `agent ${agentId} ("${name}") could not be attested — the compliance record could not be ` +
+        `written to Hedera, so no sale can be authorised right now (${String(error).slice(0, 90)})`,
       wallet,
       name,
     };
   }
 
+  if (!attestation.compliant) {
+    return {
+      verified: false,
+      reason:
+        `agent ${agentId} ("${name}") holds no compliance attestation for health data ` +
+        `(scored ${attestation.response}, recorded on Hedera as ${attestation.requestHash.slice(0, 18)}…)`,
+      wallet,
+      name,
+      attestation,
+    };
+  }
+
   return {
     verified: true,
-    reason: `agent ${agentId} ("${name}") is registered, active and attested`,
+    reason:
+      `agent ${agentId} ("${name}") is registered, active and attested ` +
+      `(scored ${attestation.response}, recorded on Hedera as ${attestation.requestHash.slice(0, 18)}…)`,
     wallet,
     name,
+    attestation,
   };
 }
 
@@ -641,6 +672,20 @@ export class SellerExecutor implements AgentExecutor {
         ...(result.payment ? { payment: result.payment } : {}),
         identityVerified: identity?.verified ?? false,
         identityReason: identity?.reason ?? "no identity supplied",
+        // The buyer can fetch this off the topic and check the verdict itself
+        // rather than taking the seller's word for the refusal.
+        ...(identity?.attestation
+          ? {
+              attestation: {
+                requestHash: identity.attestation.requestHash,
+                response: identity.attestation.response,
+                tag: VALIDATION_TAG,
+                requestTransactionId: identity.attestation.requestTransactionId,
+                responseTransactionId: identity.attestation.responseTransactionId,
+                hashscanUrl: identity.attestation.hashscanUrl,
+              },
+            }
+          : {}),
       },
       extensions: [],
       referenceTaskIds: [],

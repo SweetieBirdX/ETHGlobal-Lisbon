@@ -69,11 +69,21 @@ Because nobody is watching each deal, trust has to be structural: the buyer prov
 | **HCS** (Consensus Service) | `src/hedera/audit.ts`, `HcsAuditTrailHook` | Every completed exchange is written to a single audit topic as JSON. The Agent Kit's own hook also logs tool executions to the same topic, so the trail covers both what the agent *did* and what it *sold*. |
 | **x402** | `src/x402/server.ts`, `src/x402/pay.ts` | The data endpoint is payment-gated: an unpaid `GET` returns **402** with the terms in a header; the buyer agent signs a Hedera transfer and retries; the same request then returns the data. A request must also name the negotiation that authorised it, so the endpoint cannot be used to buy around the policy. Facilitator: blocky402. Asset: native HBAR (`0.0.0`). |
 | **A2A** (`@a2a-js/sdk`) | `src/a2a/` | The seller publishes an AgentCard at `/.well-known/agent-card.json`; the buyer discovers the endpoint from it and negotiates over JSON-RPC. The buyer is given only a base URL — everything else comes from the card. |
-| **ERC-8004** | `src/erc8004/` | Identity: both agents hold registry NFTs whose `tokenURI` is their registration file. Reputation: after each sale the seller publishes feedback citing the payment transaction, so the rating is checkable rather than asserted. |
+| **ERC-8004** | `src/erc8004/` | Identity: both agents hold registry NFTs whose `tokenURI` is their registration file. Reputation: after each sale the seller publishes feedback citing the payment transaction, so the rating is checkable rather than asserted. Compliance: attested per negotiation — recorded on HCS rather than the ValidationRegistry, for the reason below. |
 
 **Deployed contracts used (Hedera Testnet, not ours):**
 - IdentityRegistry `0x8004A818BFB912233c491871b3d84c89A494BD9e`
 - ReputationRegistry `0x8004B663056A597Dffe9eCcC1965A193B7388713`
+
+### Which ERC-8004 registries we use, and why one is missing
+
+The Identity and Reputation registries are used through **real on-chain calls** to the deployed ERC-8004 contracts above — `register`, `getAgentWallet`, `tokenURI`, `giveFeedback`, `getSummary`.
+
+The **ValidationRegistry is not used, because it does not exist to be used.** The official ERC-8004 deployment list covers only the Identity and Reputation registries across every chain it targets, Hedera Testnet included; the validation section of the spec is still under active revision with the TEE community, and there is **no live deployment on any chain**. The interface is in `src/erc8004/abis/ValidationRegistry.json` for the day that changes, but it has no bytecode and no address behind it.
+
+So the compliance attestation is recorded on **Hedera Consensus Service** instead (`src/erc8004/validation.ts`). One `validation_request` / `validation_response` pair is written per negotiation, deliberately using the registry's own vocabulary — `validatorAddress`, `agentId`, `requestURI`, `requestHash`, `response`, `responseURI`, `responseHash`, `tag` — so the record is a faithful stand-in and adopting the real registry later is a change of substrate, not a redesign. Both verdicts are written: a refused agent's score of 0 is on the topic just as publicly as an approved agent's 100.
+
+**The validator is the seller itself.** There is no independent auditor — that is out of scope for a hackathon — so an attestation here proves *that the check ran and what it decided*, and is retrievable by anyone through the mirror node. It is **not** third-party verification, and nothing in this project should be read as claiming otherwise.
 
 ---
 
@@ -81,11 +91,11 @@ Because nobody is watching each deal, trust has to be structural: the buyer prov
 
 An offer is only accepted if it passes all three, in order. Each can only narrow the outcome.
 
-1. **Identity** — `getAgentWallet(agentId)` on the IdentityRegistry, then the registration file is decoded and checked for `active: true`, then the id is checked against an attestation list (a stand-in for a ValidationRegistry compliance attestation). Being registered is not the same as being approved: the seller's own agent 103 is registered, active — and refused.
+1. **Identity** — `getAgentWallet(agentId)` on the IdentityRegistry, then the registration file is decoded and checked for `active: true`, then a compliance attestation is written to Hedera and the verdict decides. Being registered is not the same as being approved: the seller's own agent 103 is registered, active — and refused with a score-0 attestation anyone can read back.
 2. **Policy** — category must be permitted and the price must meet the owner's minimum. An offer of 1000 HBAR for a category the owner excluded is still refused; money does not override the policy.
 3. **Cohort size** — a cohort below `MIN_COHORT_SIZE` (3) is refused. An "average" over one person is that person's record with a different label.
 
-A refusal costs the buyer nothing: no payment is signed, nothing goes on-chain.
+A refusal costs the buyer nothing — no payment is ever signed. It is not silent, though: any agent that reaches gate 1 gets a compliance attestation written to Hedera whichever way the verdict goes, and a policy refusal is recorded in the owner's own ledger. What a refusal never produces is a charge, a sale record, or a reputation rating.
 
 **The gates are not bypassable by paying directly.** They would be decorative if the endpoint served anyone holding the price, so a paid request has to name the negotiation that authorised it: the id must belong to an acceptance that is still open, and the criteria must be exactly the ones agreed. A request for a forbidden category, or one with no negotiation behind it, is refused with **403** *before* the payment layer — it is never even quoted a price. And because an acceptance closes once it settles, the same negotiation cannot be paid twice to collect a second audit entry and a second reputation rating.
 
@@ -134,7 +144,8 @@ Run the demo with **`npm run dev`**, not three separate terminals: the policy li
 ```bash
 npm test               # = test:e2e — needs a funded account, so it costs 0.5 ℏ
 npm run test:e2e       # full flow, both an accepted and a refused offer  (costs 0.5 ℏ)
-npm run test:errors    # network failure, timeout, insufficient balance, bad agent ids  (costs nothing)
+npm run test:errors    # network failure, timeout, insufficient balance, bad agent ids  (HCS fees only)
+npm run test:validation # compliance attestations land on Hedera and read back  (HCS fees only)
 npm run test:binding   # the endpoint serves only what was negotiated, once  (costs 0.5 ℏ)
 npm run verify:phase7  # runs the full flow twice, then every failure mode  (costs 1 ℏ)
 ```
@@ -180,10 +191,34 @@ scripts/         setup and verification scripts
 
 ---
 
+## Requirement coverage
+
+What is genuinely wired up, what stands in for something, and the command that proves each claim. Rows marked **stand-in** are not doing what their name suggests — read the note.
+
+| Requirement | Status | Where | Proof |
+|---|---|---|---|
+| Autonomous agent-to-agent negotiation (A2A) | real | `src/a2a/` | `scripts/test-negotiation.ts` |
+| No human approves any individual payment | real | `src/a2a/buyer-client.ts` → `src/x402/pay.ts` | `npm run test:e2e` |
+| x402 payment-gated resource on Hedera | real, 402 → sign → 200 | `src/x402/server.ts` | `npm run test:e2e`, `scripts/x402-buy.ts` |
+| Native HBAR micropayment, settled on testnet | real | facilitator blocky402, asset `0.0.0` | HashScan tx in every run |
+| Policy enforced at the point of payment | real | `requireAcceptedNegotiation` | `npm run test:binding` |
+| Hedera Agent Kit, `AgentMode.AUTONOMOUS` | real | `src/hedera/agentkit.ts` | `scripts/test-agent-kit.ts` |
+| HCS audit trail | real | `src/hedera/audit.ts` | panel's audit view, read from the mirror node |
+| ERC-8004 IdentityRegistry | real on-chain calls | `src/erc8004/contracts.ts` | agent ids 103/104, `scripts/register-agents.ts` |
+| ERC-8004 ReputationRegistry | real on-chain calls | `src/erc8004/feedback.ts` | `npm run verify:phase7` (count increases per sale) |
+| ERC-8004 ValidationRegistry | **not used — no deployment exists** | — | see the ERC-8004 section above |
+| Compliance attestation | real record, **stand-in substrate**: HCS, not the ValidationRegistry | `src/erc8004/validation.ts` | `npm run test:validation` |
+| Independent third-party validator | **stand-in**: the seller self-attests | — | stated plainly above; out of scope |
+| Natural-language policy, set once | real | `src/policy/parser.ts` | panel policy form |
+| Raw data never leaves the owner's store | real | `src/data/` (AES-256-GCM, min cohort 3) | `npm run test:e2e` asserts no raw fields in the payload |
+| Repeatability under load | verified twice over | — | `npm run verify:phase7` (24/24) |
+
+Two rows are deliberately not green, and both are named rather than buried: there is no ValidationRegistry to call, and the validator is not independent.
+
 ## Notes and limits
 
 - Everything runs on **Hedera testnet**. No real funds.
-- The compliance attestation in gate 1 is **simulated** with an approved-id list; a real deployment would read a ValidationRegistry attestation. That is the only mocked trust component.
+- The compliance attestation is a **real, publicly readable record on Hedera**, but the validator is the seller itself and the decision rule behind it is still the owner's vetted-id list. It is not independent verification, and it is not the ValidationRegistry — which has no deployment on any chain. That remains the one mocked trust component.
 - `trend` compares a cohort against the whole population — there is no time series in the data, so it is not change over time.
 - The seeded population is synthetic and generated from a fixed seed, so the demo numbers are reproducible.
 - The endpoint price is fixed at 0.5 ℏ while the policy minimum is a floor — an accepted offer below the endpoint price would be quoted the endpoint's price, and the buyer's own guard refuses to overpay.

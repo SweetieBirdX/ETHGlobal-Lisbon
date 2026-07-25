@@ -63,6 +63,10 @@ function toAuditEntry(message: MirrorTopicMessage): AuditEntry {
     const event = String(parsed["event"] ?? "event");
     const detail = [
       parsed["buyerAgentId"] ? `buyer #${parsed["buyerAgentId"]}` : "",
+      // Compliance attestations name the subject `agentId`, matching the
+      // ValidationRegistry's own field names.
+      parsed["agentId"] ? `agent #${parsed["agentId"]}` : "",
+      parsed["response"] !== undefined ? `score ${parsed["response"]}` : "",
       parsed["priceHbar"] !== undefined ? `${parsed["priceHbar"]} ℏ` : "",
       parsed["criteria"] ? JSON.stringify(parsed["criteria"]) : "",
     ]

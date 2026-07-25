@@ -13,6 +13,7 @@ import { createSellerWallet } from "../src/erc8004/wallets.js";
 import { parsePolicy } from "../src/policy/parser.js";
 import { setPolicy } from "../src/a2a/seller-executor.js";
 import { startX402Server } from "../src/x402/server.js";
+import { countTopicEvents } from "../src/hedera/mirror.js";
 
 /**
  * The whole system, end to end, in one run.
@@ -34,6 +35,9 @@ const POLICY_STATEMENT =
   "session counts only — to verified research companies, minimum 0.4 HBAR per query. " +
   "Never share my heart rate, and never any health or medication data.";
 
+/** The audit entry a completed sale writes. */
+const SALE_EVENT = "data_access_completed";
+
 /** The audit and reputation writes happen after the buyer has its data. */
 const CHAIN_SETTLE_WAIT_MS = 30_000;
 
@@ -45,16 +49,14 @@ const record = (label: string, passed: boolean) => {
 
 const sellerWallet = createSellerWallet();
 const buyerAgentId = getBuyerAgentId();
-const topicId = process.env.HCS_AUDIT_TOPIC_ID;
-
-async function hcsSequence(): Promise<number> {
-  if (!topicId) throw new Error("HCS_AUDIT_TOPIC_ID is not set");
-  const response = await fetch(
-    `https://testnet.mirrornode.hedera.com/api/v1/topics/${topicId}/messages?order=desc&limit=1`,
-  );
-  const body = (await response.json()) as { messages?: { sequence_number: number }[] };
-  return body.messages?.[0]?.sequence_number ?? 0;
-}
+/**
+ * Sale records on the topic.
+ *
+ * Counted by event rather than by sequence number: the topic also carries the
+ * compliance attestations written during gate 1, so "the topic grew" no longer
+ * means "a sale was recorded".
+ */
+const saleEntries = (): Promise<number> => countTopicEvents(SALE_EVENT);
 
 async function feedbackCount(): Promise<number> {
   const summary = await reputationRegistry.getSummary!(
@@ -94,9 +96,9 @@ function countCompleted(): number {
 async function scenarioAccepted(): Promise<void> {
   console.log("\n=== Scenario 1: an offer the owner's policy permits ===\n");
 
-  const beforeHcs = await hcsSequence();
+  const beforeSales = await saleEntries();
   const beforeFeedback = await feedbackCount();
-  console.log(`  baseline: HCS seq ${beforeHcs}, feedback count ${beforeFeedback}\n`);
+  console.log(`  baseline: sale entries ${beforeSales}, feedback count ${beforeFeedback}\n`);
 
   const result: PurchaseResult = await negotiateAndPurchase(
     { category: "running performance" },
@@ -123,12 +125,12 @@ async function scenarioAccepted(): Promise<void> {
   console.log(`\n  waiting ${CHAIN_SETTLE_WAIT_MS / 1000}s for the post-payment chain...`);
   await new Promise((resolve) => setTimeout(resolve, CHAIN_SETTLE_WAIT_MS));
 
-  const afterHcs = await hcsSequence();
+  const afterSales = await saleEntries();
   const afterFeedback = await feedbackCount();
   const query = latestQuery();
 
-  console.log(`  after: HCS seq ${afterHcs}, feedback count ${afterFeedback}\n`);
-  record("HCS audit entry written", afterHcs === beforeHcs + 1);
+  console.log(`  after: sale entries ${afterSales}, feedback count ${afterFeedback}\n`);
+  record("HCS audit entry written", afterSales === beforeSales + 1);
   record("ERC-8004 feedback submitted", afterFeedback === beforeFeedback + 1);
   record("query marked completed", query?.status === "completed");
   record(
@@ -141,7 +143,7 @@ async function scenarioAccepted(): Promise<void> {
 async function scenarioRejected(): Promise<void> {
   console.log("\n=== Scenario 2: an offer the policy forbids, at double the price ===\n");
 
-  const beforeHcs = await hcsSequence();
+  const beforeSales = await saleEntries();
   const beforeFeedback = await feedbackCount();
   const beforeCompleted = countCompleted();
 
@@ -155,12 +157,13 @@ async function scenarioRejected(): Promise<void> {
   record("no payment was attempted", result.purchase === undefined);
   record("no payment instruction issued", result.negotiation.payment === undefined);
 
-  // A refusal writes nothing on-chain and charges nothing. It *is* recorded in
-  // the owner's own ledger as a decline (session 36) — "what your agent turned
-  // down on your behalf" — so the absence to assert on is a completed sale,
-  // not a ledger row.
+  // A refusal charges nothing and produces no sale. Two things are legitimately
+  // written, so neither is the absence to assert on: a `declined` row in the
+  // owner's own ledger (session 36), and the compliance attestation from gate 1,
+  // which is recorded for any agent that gets that far — including one that is
+  // then refused. What must be absent is a *sale*.
   await new Promise((resolve) => setTimeout(resolve, 3_000));
-  record("no new HCS audit entry", (await hcsSequence()) === beforeHcs);
+  record("no new HCS sale entry", (await saleEntries()) === beforeSales);
   record("no new reputation feedback", (await feedbackCount()) === beforeFeedback);
   record("no new completed sale", countCompleted() === beforeCompleted);
   record(
