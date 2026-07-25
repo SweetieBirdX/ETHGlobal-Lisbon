@@ -11,6 +11,7 @@
     "test:binding": "tsx scripts/test-payment-binding.ts",
     "test:validation": "tsx scripts/test-validation.ts",
     "test:receipt": "tsx scripts/test-receipt-nft.ts",
+    "test:rounds": "tsx scripts/test-multiround.ts",
     "verify:phase7": "tsx scripts/verify-phase7.ts",
     "web": "tsx src/web/server.ts",
     "dev": "tsx src/dev-server.ts"

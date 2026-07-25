@@ -69,7 +69,7 @@ Because nobody is watching each deal, trust has to be structural: the buyer prov
 | **HCS** (Consensus Service) | `src/hedera/audit.ts`, `HcsAuditTrailHook` | Every completed exchange is written to a single audit topic as JSON. The Agent Kit's own hook also logs tool executions to the same topic, so the trail covers both what the agent *did* and what it *sold*. |
 | **x402** | `src/x402/server.ts`, `src/x402/pay.ts` | The data endpoint is payment-gated: an unpaid `GET` returns **402** with the terms in a header; the buyer agent signs a Hedera transfer and retries; the same request then returns the data. A request must also name the negotiation that authorised it, so the endpoint cannot be used to buy around the policy. Facilitator: blocky402. Asset: native HBAR (`0.0.0`). |
 | **HTS** (Token Service) | `src/hedera/receipt.ts` | After every completed sale, one NFT from the "Data Access Receipt" collection is minted **to the account that paid** (read from the x402 settlement, not from config). Its on-chain metadata — capped by Hedera at 100 bytes, hence a truncated hash — references the negotiation id, the HCS audit entry and the compliance attestation, so the buyer holds one token linking all three proofs. The seller is treasury and sole supply key: only the data owner's agent can issue receipts. |
-| **A2A** (`@a2a-js/sdk`) | `src/a2a/` | The seller publishes an AgentCard at `/.well-known/agent-card.json`; the buyer discovers the endpoint from it and negotiates over JSON-RPC. The buyer is given only a base URL — everything else comes from the card. |
+| **A2A** (`@a2a-js/sdk`) | `src/a2a/` | The seller publishes an AgentCard at `/.well-known/agent-card.json`; the buyer discovers the endpoint from it and negotiates over JSON-RPC. Each negotiation is a real A2A **Task** with a lifecycle: a policy decline leaves it `input-required` (an open invitation to counter-offer), acceptance closes it `completed`, an unverified buyer gets `failed`. A counter-offer lands in the **same task** and the seller's reply acknowledges the round — "last round you offered 0.1 ℏ and I declined". A completed task cannot be reopened; the protocol itself refuses. |
 | **ERC-8004** | `src/erc8004/` | Identity: both agents hold registry NFTs whose `tokenURI` is their registration file. Reputation: after each sale the seller publishes feedback citing the payment transaction, so the rating is checkable rather than asserted. Compliance: attested per negotiation — recorded on HCS rather than the ValidationRegistry, for the reason below. |
 
 **Deployed contracts used (Hedera Testnet, not ours):**
@@ -150,6 +150,7 @@ npm run test:e2e       # full flow, both an accepted and a refused offer  (costs
 npm run test:errors    # network failure, timeout, insufficient balance, bad agent ids  (HCS fees only)
 npm run test:validation # compliance attestations land on Hedera and read back  (HCS fees only)
 npm run test:receipt   # receipt NFT lands in the buyer's account, replay mints nothing  (costs 0.5 ℏ)
+npm run test:rounds    # two-round negotiation in one task: decline → counter-offer → accept  (costs 0.5 ℏ)
 npm run test:binding   # the endpoint serves only what was negotiated, once  (costs 0.5 ℏ)
 npm run verify:phase7  # runs the full flow twice, then every failure mode  (costs 1 ℏ)
 ```
@@ -202,6 +203,7 @@ What is genuinely wired up, what stands in for something, and the command that p
 | Requirement | Status | Where | Proof |
 |---|---|---|---|
 | Autonomous agent-to-agent negotiation (A2A) | real | `src/a2a/` | `scripts/test-negotiation.ts` |
+| Multi-round negotiation with Task lifecycle | real | `publishReply` + `counterOffer` | `npm run test:rounds` — decline → counter → accept in one task |
 | No human approves any individual payment | real | `src/a2a/buyer-client.ts` → `src/x402/pay.ts` | `npm run test:e2e` |
 | x402 payment-gated resource on Hedera | real, 402 → sign → 200 | `src/x402/server.ts` | `npm run test:e2e`, `scripts/x402-buy.ts` |
 | Native HBAR micropayment, settled on testnet | real | facilitator blocky402, asset `0.0.0` | HashScan tx in every run |

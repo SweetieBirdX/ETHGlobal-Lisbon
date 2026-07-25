@@ -43,6 +43,12 @@ export interface PaymentInstruction {
   scheme: string;
 }
 
+/** Identifies an open negotiation, so a follow-up lands in the same task. */
+export interface NegotiationSession {
+  taskId: string;
+  contextId: string;
+}
+
 export interface NegotiationResponse {
   /** `"accept"` or `"decline"` as reported by the seller, when it said. */
   decision?: string;
@@ -52,6 +58,13 @@ export interface NegotiationResponse {
   reply: string;
   /** Where and what to pay — present only when the offer was accepted. */
   payment?: PaymentInstruction;
+  /**
+   * The task this reply belongs to. A declined offer leaves the task open
+   * (input-required), so passing these back via {@link counterOffer} continues
+   * the same negotiation instead of opening a new one.
+   */
+  taskId: string;
+  contextId: string;
   /** Untouched result, for callers that need the task/message details. */
   raw: SendMessageResult;
 }
@@ -109,6 +122,20 @@ function extractMetadata(result: SendMessageResult): Record<string, unknown> {
 }
 
 /**
+ * The task/context ids of this exchange, whichever shape the result took.
+ *
+ * A Task carries them as `id`/`contextId`; a bare Message echoes them as
+ * `taskId`/`contextId`. Since session 46 the seller answers with Tasks, so the
+ * first branch is the live one — the second keeps old-shape peers readable.
+ */
+function extractSession(result: SendMessageResult): NegotiationSession {
+  if ("parts" in result) {
+    return { taskId: result.taskId, contextId: result.contextId };
+  }
+  return { taskId: result.id, contextId: result.contextId };
+}
+
+/**
  * Sends arbitrary text to the seller agent.
  *
  * Useful for the messages a negotiation opens with before there is an offer on
@@ -119,6 +146,8 @@ export async function sendNegotiationMessage(
   text: string,
   metadata?: Record<string, unknown>,
   baseUrl: string = SELLER_BASE_URL,
+  /** Continue an existing negotiation instead of opening a new one. */
+  session?: NegotiationSession,
 ): Promise<NegotiationResponse> {
   const factory = new ClientFactory();
   // Reads /.well-known/agent-card.json and picks a transport from the card.
@@ -126,8 +155,10 @@ export async function sendNegotiationMessage(
 
   const message: Message = {
     messageId: randomUUID(),
-    contextId: "",
-    taskId: "",
+    // Empty ids open a fresh negotiation; a session's ids land the message in
+    // the same task, which the seller's reply then acknowledges as a round.
+    contextId: session?.contextId ?? "",
+    taskId: session?.taskId ?? "",
     role: Role.ROLE_USER,
     parts: [textPart(text)],
     // The buyer names its ERC-8004 identity on every message; the seller looks
@@ -152,6 +183,7 @@ export async function sendNegotiationMessage(
       typeof replyMetadata["reason"] === "string" ? replyMetadata["reason"] : undefined,
     reply: extractReply(raw),
     payment: replyMetadata["payment"] as PaymentInstruction | undefined,
+    ...extractSession(raw),
     raw,
   };
 }
@@ -166,6 +198,7 @@ export async function sendNegotiationRequest(
   criteria: DataCriteria,
   offeredPrice: number,
   baseUrl: string = SELLER_BASE_URL,
+  session?: NegotiationSession,
 ): Promise<NegotiationResponse> {
   return sendNegotiationMessage(
     formatOffer(criteria, offeredPrice),
@@ -173,7 +206,34 @@ export async function sendNegotiationRequest(
     // than parsing them back out of the sentence.
     { offeredPriceHbar: offeredPrice, ...criteria },
     baseUrl,
+    session,
   );
+}
+
+/**
+ * Raises (or revises) an offer inside the same negotiation.
+ *
+ * A declined offer leaves the task in `input-required` — the seller's "raise
+ * the offer and I will reconsider" is a genuine invitation. This sends the new
+ * terms into that same task, and the seller's reply acknowledges the round:
+ * "last round you offered X and I declined". The policy itself is unchanged —
+ * the same terms always get the same verdict; what continues is the session.
+ */
+export async function counterOffer(
+  previous: NegotiationResponse,
+  criteria: DataCriteria,
+  offeredPrice: number,
+  baseUrl: string = SELLER_BASE_URL,
+): Promise<NegotiationResponse> {
+  if (!previous.taskId) {
+    throw new Error(
+      "The previous reply carried no taskId — there is no negotiation to continue.",
+    );
+  }
+  return sendNegotiationRequest(criteria, offeredPrice, baseUrl, {
+    taskId: previous.taskId,
+    contextId: previous.contextId,
+  });
 }
 
 export interface PurchaseResult {

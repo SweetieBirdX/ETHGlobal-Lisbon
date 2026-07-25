@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ZeroAddress } from "ethers";
-import { Role, type Message, type Part } from "@a2a-js/sdk";
+import { Role, TaskState, type Message, type Part } from "@a2a-js/sdk";
 import {
   AgentEvent,
   type AgentExecutor,
@@ -595,6 +595,29 @@ export class SellerExecutor implements AgentExecutor {
     }
   }
 
+  /**
+   * What the previous round said, when this message continues an open task.
+   *
+   * The task's current status carries the seller's own last reply, so the
+   * previous verdict is read from a record this executor wrote — no separate
+   * session store to drift out of sync.
+   */
+  private priorRound(requestContext: RequestContext):
+    | { round: number; decision?: string; reason?: string; priceHbar?: number }
+    | undefined {
+    const previousReply = requestContext.task?.status?.message;
+    if (!previousReply) return undefined;
+
+    const metadata = previousReply.metadata ?? {};
+    const price = Number(metadata["offeredPriceHbar"]);
+    return {
+      round: Number(metadata["round"]) || 1,
+      decision: typeof metadata["decision"] === "string" ? metadata["decision"] : undefined,
+      reason: typeof metadata["reason"] === "string" ? metadata["reason"] : undefined,
+      priceHbar: Number.isFinite(price) ? price : undefined,
+    };
+  }
+
   private async negotiate(
     requestContext: RequestContext,
     eventBus: ExecutionEventBus,
@@ -766,19 +789,43 @@ export class SellerExecutor implements AgentExecutor {
     }
   }
 
-  /** Publishes one reply and closes the exchange. */
+  /**
+   * Publishes one reply and settles this round of the task.
+   *
+   * The audit (session 45) found the old version emitted a bare message and
+   * never touched the task store, so every reply carried a `taskId` the server
+   * itself could not resume — "Task not found" on any follow-up. Now the first
+   * round persists a real Task and every reply arrives as a status update, so
+   * the id in the reply is one the buyer can genuinely continue:
+   *
+   *   accept          → COMPLETED       (negotiation over, go pay)
+   *   policy decline  → INPUT_REQUIRED  (the reply invites a counter-offer)
+   *   unverified / internal error → FAILED (no invitation to continue)
+   */
   private publishReply(
     requestContext: RequestContext,
     eventBus: ExecutionEventBus,
     result: NegotiationResult,
     identity?: IdentityCheck,
   ): void {
+    const prior = this.priorRound(requestContext);
+    const round = (prior?.round ?? 0) + 1;
+
+    // A counter-offer is answered as part of the same conversation, and the
+    // reply says so — the buyer should not have to diff task ids to know the
+    // seller remembers the last round.
+    const reply = prior
+      ? `Round ${round} of our negotiation — last round you offered ` +
+        `${prior.priceHbar ?? "?"} HBAR and I ${prior.decision === "accept" ? "accepted" : "declined"}` +
+        `${prior.reason ? ` (${prior.reason})` : ""}. ${result.reply}`
+      : result.reply;
+
     const response: Message = {
       messageId: randomUUID(),
       contextId: requestContext.contextId,
       taskId: requestContext.taskId,
       role: Role.ROLE_AGENT,
-      parts: [textPart(result.reply)],
+      parts: [textPart(reply)],
       // The buyer agent needs to branch on the outcome without parsing prose,
       // and the identity result is what the audit trail records.
       metadata: {
@@ -789,6 +836,10 @@ export class SellerExecutor implements AgentExecutor {
         ...(result.payment ? { payment: result.payment } : {}),
         identityVerified: identity?.verified ?? false,
         identityReason: identity?.reason ?? "no identity supplied",
+        // Session bookkeeping: which round this reply settles, and what the
+        // buyer offered — the next round's continuity line is built from this.
+        round,
+        offeredPriceHbar: extractOffer(requestContext.userMessage).priceHbar ?? null,
         // The buyer can fetch this off the topic and check the verdict itself
         // rather than taking the seller's word for the refusal.
         ...(identity?.attestation
@@ -808,14 +859,48 @@ export class SellerExecutor implements AgentExecutor {
       referenceTaskIds: [],
     };
 
-    eventBus.publish(AgentEvent.message(response));
+    // First round: persist the task, so the id this reply carries is one the
+    // buyer can actually come back to. Continuations skip this — the task is
+    // already in the store, which is how the request got here at all.
+    if (!requestContext.task) {
+      eventBus.publish(
+        AgentEvent.task({
+          id: requestContext.taskId,
+          contextId: requestContext.contextId,
+          status: {
+            state: TaskState.TASK_STATE_SUBMITTED,
+            message: undefined,
+            timestamp: new Date().toISOString(),
+          },
+          artifacts: [],
+          history: [requestContext.userMessage],
+          metadata: undefined,
+        }),
+      );
+    }
+
+    const state =
+      result.decision === "accept"
+        ? TaskState.TASK_STATE_COMPLETED
+        : result.reason === "identity_unverified" || result.reason === "internal_error"
+          ? TaskState.TASK_STATE_FAILED
+          : TaskState.TASK_STATE_INPUT_REQUIRED;
+
+    eventBus.publish(
+      AgentEvent.statusUpdate({
+        taskId: requestContext.taskId,
+        contextId: requestContext.contextId,
+        status: { state, message: response, timestamp: new Date().toISOString() },
+        metadata: undefined,
+      }),
+    );
     eventBus.finished();
   }
 
   /**
-   * Nothing to cancel: a decision is produced inside `execute`, so there is
-   * never an in-flight task to interrupt. This changes in Phase 7, where
-   * accepting kicks off a payment the buyer has to complete.
+   * Tasks here live exactly as long as one request — every round is answered
+   * within the call that delivered it — so there is never an in-flight task to
+   * interrupt, and cancellation stays a no-op.
    */
   async cancelTask(
     _taskId: string,

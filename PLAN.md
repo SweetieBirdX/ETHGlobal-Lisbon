@@ -12,6 +12,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
+> **Session 46 — real Task lifecycle + multi-round:** negotiations are now genuine A2A Tasks (decline → `input-required`, accept → `completed`, unverified → `failed`); a counter-offer lands in the same task and the reply acknowledges the round; a completed task cannot be reopened. `npm run test:rounds`, 10/10. Replies are **Task-shaped now** — use the buyer-client helpers, don't assume a bare Message.
+>
 > **Session 44 — data-type enforcement + scope amendment:** `allowedDataTypes` is now enforced at the policy gate against a two-bucket taxonomy (performance / health); the store carries synthetic `cycleTracking`/`medicationCount` fields so a health request is refused against real data (**CLAUDE.md rule 7 amended**). Also: never count topic events in a window — `countTopicEventsSince` + `topicSequence()` baseline only (the windowed count slid backwards and broke `verify:phase7`).
 >
 > **Session 43 — HTS:** every completed sale mints a receipt NFT (collection `0.0.9743962`) to the paying account, metadata linking payment + HCS entry + attestation. `npm run test:receipt`, 10/10. New setup step: `scripts/create-receipt-token.ts`.
@@ -114,6 +116,20 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (46)
+**Completed:** Both A2A gaps from the session-45 audit closed together — **real Task lifecycle** (phantom taskId gone) and **real multi-round negotiation**. Also: audit-trace ledger rows 65/66 deleted; `docs/demo-script.md` created as a **working draft** (9.3 still owns the finished version).
+**Files changed:** `src/a2a/seller-executor.ts` — `publishReply` persists a real Task on round 1 (`AgentEvent.task`, state SUBMITTED) and answers every round with `AgentEvent.statusUpdate`: accept → COMPLETED, policy declines → **INPUT_REQUIRED** (task stays open for a counter), identity/internal failures → FAILED; `priorRound()` reads the previous verdict from `requestContext.task.status.message` (the seller's own last reply — no separate session store), and continuation replies open with "Round N — last round you offered X and I declined (reason)"; reply metadata gains `round` + `offeredPriceHbar`. `src/a2a/buyer-client.ts` — `NegotiationResponse` gains `taskId`/`contextId`; `sendNegotiationMessage`/`sendNegotiationRequest` accept an optional session; new `counterOffer(previous, criteria, price)`. `scripts/test-multiround.ts` (**new**, `npm run test:rounds`). `docs/demo-script.md` (**new**, draft). `README.md`, `package.json`.
+**Verification:** `npx tsc --noEmit` clean. `npm run test:rounds` → **10/10** live: round 1 (0.1 ℏ) declined `price_too_low` as a **Task** in state 6 (input-required); round 2 via `counterOffer` (0.5 ℏ) landed in the **same taskId** (`89536ea5…`), reply verbatim *"Round 2 of our negotiation — last round you offered 0.1 HBAR and I declined (price_too_low). Offer accepted…"*, state 3 (completed); the acceptance was **paid** (`0.0.7162784@1784987144.318629069`, receipt #16) so nothing dangles; round 3 reopen attempt refused **by the SDK itself**: "Task … is in a terminal state (3) and cannot be modified". Full regression sweep after the shape change (every reply is now a Task, not a bare Message): `test:errors` 17/17, `test:validation` 22/22, `test:binding` 17/17, `test:e2e` 26/26, `verify:phase7` **24/24**.
+**What the next person should do:** Phase 9.3 — finish `docs/demo-script.md` (timings, spoken lines, cuts). The multi-round beat is scripted in it already.
+**Known issues / things to watch for:**
+- **Every reply is now Task-shaped.** `responseMessage()` in the buyer client handles both shapes, and the whole suite passed — but any NEW consumer reading `negotiation.raw` should use the helpers, not assume a bare Message.
+- **Identity gate runs every round** — a two-round negotiation writes two attestation pairs (4 HCS messages). Consistent with per-message attestation, but it makes multi-round sessions chattier on the topic.
+- The task store is **in-memory** (`InMemoryTaskStore`): sessions do not survive a server restart, and a counter-offer to a restarted seller gets "Task not found". Fine for the demo; worth one line if anyone asks about persistence.
+- Round counting rides the seller's own reply metadata (`round`), not `task.history` growth — deliberately, so it cannot drift with SDK history semantics.
+- The panel (`/negotiate` SSE) is still **single-round by design**; the multi-round demo runs through `npm run test:rounds`. Wiring a counter-offer button into the panel is optional polish, not a gap.
+- Deterministic policy unchanged: 0.1 ℏ is refused and 0.5 ℏ accepted identically whether or not they share a session. What changed is only that the seller now *knows* they are the same conversation.
+- Still open: earnings sum negotiated vs charged price; `create-audit-topic.ts` has no FORCE guard; `vitest` + `@langchain/openai` declared but unused. (Session-45 audit findings on task lifecycle and multi-round are **closed**; the "separate OS processes" item was explicitly skipped as cosmetic, per instruction.)
 
 ### 2026-07-25 — Emre — Claude Code session (44)
 **Completed:** Real `allowedDataTypes` enforcement — the longest-standing open audit finding — with a **health bucket** to enforce against, demonstrable live. **This session amended CLAUDE.md rule 7** (health data was fully out of scope; it now exists as clearly-synthetic fields specifically so the gate can refuse it demonstrably — approved via the plan).
