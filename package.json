@@ -1,0 +1,26 @@
+{
+  "name": "ethglobal-lisbon",
+  "version": "1.0.0",
+  "description": "Users keep ownership of their own fitness data: a personal AI agent negotiates access with a research company's agent over the A2A protocol, identity is verified via ERC-8004, and accepted deals settle instantly as HBAR micropayments on Hedera testnet via x402 — with no human approving any individual transaction.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SweetieBirdX/ETHGlobal-Lisbon.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/SweetieBirdX/ETHGlobal-Lisbon/issues"
+  },
+  "homepage": "https://github.com/SweetieBirdX/ETHGlobal-Lisbon#readme",
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}

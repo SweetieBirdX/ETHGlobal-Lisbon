@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 0 — Project Skeleton (in progress, 0.1 done)
+**Active phase:** Phase 0 — Project Skeleton (in progress, 0.1–0.2 done)
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -18,7 +18,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ### Phase 0 — Project Skeleton
 - [x] 0.1 Repo and base files
-- [ ] 0.2 package.json and TypeScript setup
+- [x] 0.2 package.json and TypeScript setup
 - [ ] 0.3 Install dependencies
 - [ ] 0.4 Folder structure
 - [ ] 0.5 .env.example
@@ -104,6 +104,13 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (2)
+**Completed:** Phase 0.2
+**Files changed:** `package.json` (new, `"type": "module"`, license Apache-2.0), `package-lock.json`, `tsconfig.json` (new: target ES2022, module+moduleResolution NodeNext, strict, outDir `dist`, includes `src/**/*.ts` and `scripts/**/*.ts`)
+**Verification:** Wrote a throwaway `scripts/_tscheck.ts` using a `node:os` import + typed function. `npx tsc --noEmit` → no errors; `npx tsc` → emitted `dist/scripts/_tscheck.js`; `npx tsx scripts/_tscheck.ts` and `node dist/scripts/_tscheck.js` both printed `TS setup OK on DESKTOP-RCUP6QS`. Throwaway file and `dist/` deleted afterwards.
+**What the next person should do:** Phase 0.3 — install runtime dependencies (see `tech-stack-detay.md` for exact package names).
+**Known issues / things to watch for:** Installed TypeScript resolves to 7.x and Node is v24 — `tsc` and `tsx` both work with NodeNext here, but if a later dependency's types misbehave, pinning `typescript@^5` is the fallback.
 
 ### 2026-07-25 — Emre — Claude Code session
 **Completed:** Phase 0.1
