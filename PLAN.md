@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 0 — Project Skeleton (all code prompts 0.1–0.5 done; **blocked on the manual step**: open two Hedera testnet accounts and fill in `.env`)
+**Active phase:** Phase 1 — Hedera Base Layer (1.1 done; next: 1.2 balance query test script)
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -22,10 +22,10 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 0.3 Install dependencies
 - [x] 0.4 Folder structure
 - [x] 0.5 .env.example
-- [ ] Manual: two testnet accounts opened, `.env` filled in
+- [x] Manual: two testnet accounts opened, `.env` filled in
 
 ### Phase 1 — Hedera Base Layer
-- [ ] 1.1 Seller/buyer Hedera clients
+- [x] 1.1 Seller/buyer Hedera clients
 - [ ] 1.2 Balance query test script
 - [ ] 1.3 Create HCS audit topic (→ write `HCS_AUDIT_TOPIC_ID` to `.env`!)
 - [ ] 1.4 HCS message submission helper function
@@ -104,6 +104,16 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (6)
+**Completed:** Phase 1.1 (and the Phase 0 manual step is now done — `.env` is filled in with two real ECDSA testnet accounts)
+**Files changed:** `src/hedera/clients.ts` (new) — `createSellerClient()` / `createBuyerClient()`, both `Client.forTestnet().setOperator(accountId, PrivateKey.fromStringECDSA(key))`, `dotenv/config` imported at module top, missing env vars throw a message pointing at `.env.example`.
+**Verification:** `npm install` had to be run first (`node_modules/` was absent on this machine). `npx tsc --noEmit` clean — TS18003 from 0.4 is now gone, as predicted. A throwaway `scripts/_clientcheck.ts` built both clients and ran a real `AccountBalanceQuery` against testnet: seller `0.0.9696085` and buyer `0.0.9697053`, 14 network nodes each, **1000 ℏ** balance each. A second throwaway confirmed the missing-env path throws instead of building a half-configured client. Both throwaway scripts deleted.
+**What the next person should do:** Phase 1.2 — `scripts/check-balance.ts` (the real, committed balance script; the throwaway above is a good starting point). Then 1.3, which generates `HCS_AUDIT_TOPIC_ID` and must be written back into `.env`.
+**Known issues / things to watch for:**
+- `.env` still has `GROQ_API_KEY` empty, and `.env.example` predates the OpenAI→Groq switch in `CLAUDE.md` (it still lists `OPENAI_API_KEY`). Needs fixing before Phase 6.4; `package.json` likewise still has `@langchain/openai` rather than `@langchain/groq`.
+- `npm install` rewrote `package-lock.json` (only stripping `libc` fields from optional esbuild platform packages — a plain npm-version difference). Reverted so it stayed out of the commit; expect it to reappear on other machines and revert it the same way.
+- `prompt-list.md` is still missing from `ProjectFiles/`, so the commit message for this step was written by hand (`feat: hedera seller and buyer testnet clients`).
 
 ### 2026-07-25 — Emre — Claude Code session (5)
 **Completed:** Phase 0.5 — Phase 0 code prompts are now all done
