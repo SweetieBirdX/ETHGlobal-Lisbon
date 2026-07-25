@@ -6,15 +6,15 @@ import {
   scryptSync,
 } from "node:crypto";
 import Database from "better-sqlite3";
+import type { BasisPoints } from "../types/marketplace.js";
 
 /**
- * The owner's data store.
+ * The rights holder's catalogue.
  *
- * This is the half of the system that never goes on-chain. Fitness records live
- * here encrypted at the field level, and buyers only ever receive aggregates
- * computed from them (Phase 6.3) — so a buyer who pays for a cohort insight
- * still never sees an individual's data, and neither does anyone reading the
- * ledger.
+ * This is the half of the system that never goes on-chain. A track's master
+ * reference lives here encrypted at the field level and is only decrypted for a
+ * buyer who has actually paid — so the ledger records that a licence was
+ * granted without the asset itself ever being readable from it.
  */
 
 const ALGORITHM = "aes-256-gcm";
@@ -26,30 +26,43 @@ const KEY_LENGTH = 32;
 /** Named so a row records *which* key encrypted it, not the key itself. */
 export const DEFAULT_KEY_REF = "owner-master-key";
 
-export type QueryStatus =
+/** Every track is issued in basis points, so 10000 = the whole licensing capacity. */
+export const TOTAL_SHARES: BasisPoints = 10000;
+
+export type LicenceStatus =
   | "pending"
   | "accepted"
   | "declined"
-  | "paid"
-  | "delivered"
-  /** Paid, delivered, audited on HCS and rated on the ReputationRegistry. */
+  /** Paid, granted, audited on HCS and certified with an HTS licence NFT. */
   | "completed";
 
-export interface UserRow {
+export interface TrackRow {
   id: number;
-  encrypted_fitness_data: string;
+  title: string;
+  artist: string;
+  total_shares: BasisPoints;
+  available_shares: BasisPoints;
+  base_price_per_share: number;
+  /** Ciphertext — use {@link decryptField} with `encryption_key_ref`. */
+  encrypted_master_ref: string;
   encryption_key_ref: string;
+  created_at: string;
 }
 
-export interface QueryRow {
+export interface LicenceRow {
   id: number;
-  buyer_agent_id: string;
-  criteria: string;
+  track_id: number;
+  /** HCS-14 UAID of the buying agent, e.g. `did:uaid:...;nativeId=hedera:testnet:0.0.x`. */
+  buyer_uaid: string;
+  shares: BasisPoints;
+  licence_type: string;
+  territory: string;
+  use_case: string;
   price: number;
-  status: QueryStatus;
+  status: LicenceStatus;
   tx_hash: string | null;
-  /** Serial of the HTS receipt NFT minted for this sale, once there is one. */
-  receipt_serial: string | null;
+  /** Serial of the HTS licence certificate NFT minted for this grant. */
+  certificate_serial: string | null;
   created_at: string;
 }
 
@@ -116,7 +129,7 @@ export function decryptField(payload: string, keyRef: string = DEFAULT_KEY_REF):
   ]).toString("utf8");
 }
 
-export const DEFAULT_DB_PATH = process.env.DATA_DB_PATH ?? "fitness-data.db";
+export const DEFAULT_DB_PATH = process.env.DATA_DB_PATH ?? "catalogue.db";
 
 /**
  * Opens the database and creates the schema if it is not there yet.
@@ -129,100 +142,173 @@ export function openDatabase(path: string = DEFAULT_DB_PATH): Database.Database 
   db.pragma("foreign_keys = ON");
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-      encrypted_fitness_data TEXT NOT NULL,
-      encryption_key_ref     TEXT NOT NULL DEFAULT '${DEFAULT_KEY_REF}'
+    CREATE TABLE IF NOT EXISTS tracks (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      title                TEXT    NOT NULL,
+      artist               TEXT    NOT NULL,
+      total_shares         INTEGER NOT NULL DEFAULT ${TOTAL_SHARES},
+      available_shares     INTEGER NOT NULL,
+      base_price_per_share REAL    NOT NULL,
+      encrypted_master_ref TEXT    NOT NULL,
+      encryption_key_ref   TEXT    NOT NULL DEFAULT '${DEFAULT_KEY_REF}',
+      created_at           TEXT    NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS queries (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      buyer_agent_id TEXT    NOT NULL,
-      criteria       TEXT    NOT NULL,
-      price          REAL    NOT NULL,
-      status         TEXT    NOT NULL DEFAULT 'pending'
-                     CHECK (status IN ('pending','accepted','declined','paid','delivered','completed')),
-      tx_hash        TEXT,
-      created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+    CREATE TABLE IF NOT EXISTS licences (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      track_id           INTEGER NOT NULL REFERENCES tracks (id),
+      buyer_uaid         TEXT    NOT NULL,
+      shares             INTEGER NOT NULL,
+      licence_type       TEXT    NOT NULL,
+      territory          TEXT    NOT NULL,
+      use_case           TEXT    NOT NULL,
+      price              REAL    NOT NULL,
+      status             TEXT    NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending','accepted','declined','completed')),
+      tx_hash            TEXT,
+      certificate_serial TEXT,
+      created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE INDEX IF NOT EXISTS idx_queries_buyer ON queries (buyer_agent_id);
+    CREATE INDEX IF NOT EXISTS idx_licences_buyer ON licences (buyer_uaid);
   `);
-
-  // Migration: receipt_serial arrived after databases already existed, and
-  // CREATE TABLE IF NOT EXISTS will not touch an existing table. ALTER is
-  // additive, so — unlike the Phase 7.3 CHECK change — nothing is reseeded.
-  const columns = db.prepare("PRAGMA table_info(queries)").all() as { name: string }[];
-  if (!columns.some((column) => column.name === "receipt_serial")) {
-    db.exec("ALTER TABLE queries ADD COLUMN receipt_serial TEXT");
-  }
 
   return db;
 }
 
-/** Records the receipt NFT minted for a completed sale. */
-export function setQueryReceipt(
+/**
+ * Adds a track to the catalogue, encrypting the master reference on the way in.
+ *
+ * A fresh track has its full capacity available; `availableShares` only ever
+ * moves through {@link reserveShares}.
+ */
+export function insertTrack(
   db: Database.Database,
-  id: number,
-  receiptSerial: string,
-): void {
-  db.prepare("UPDATE queries SET receipt_serial = ? WHERE id = ?").run(receiptSerial, id);
-}
-
-/** Stores one user's fitness record, encrypting it on the way in. */
-export function insertUser(
-  db: Database.Database,
-  fitnessData: object,
+  track: {
+    title: string;
+    artist: string;
+    masterRef: string;
+    basePricePerShare: number;
+    totalShares?: BasisPoints;
+  },
   keyRef: string = DEFAULT_KEY_REF,
 ): number {
+  const totalShares = track.totalShares ?? TOTAL_SHARES;
   const result = db
     .prepare(
-      "INSERT INTO users (encrypted_fitness_data, encryption_key_ref) VALUES (?, ?)",
+      `INSERT INTO tracks
+         (title, artist, total_shares, available_shares, base_price_per_share,
+          encrypted_master_ref, encryption_key_ref)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(encryptField(JSON.stringify(fitnessData), keyRef), keyRef);
+    .run(
+      track.title,
+      track.artist,
+      totalShares,
+      totalShares,
+      track.basePricePerShare,
+      encryptField(track.masterRef, keyRef),
+      keyRef,
+    );
   return Number(result.lastInsertRowid);
 }
 
-/** Reads one user's record back, decrypting with the key the row names. */
-export function getUserData<T = unknown>(
-  db: Database.Database,
-  id: number,
-): T | undefined {
-  const row = db
-    .prepare("SELECT * FROM users WHERE id = ?")
-    .get(id) as UserRow | undefined;
-  if (!row) return undefined;
-  return JSON.parse(
-    decryptField(row.encrypted_fitness_data, row.encryption_key_ref),
-  ) as T;
+/**
+ * Reads one track back.
+ *
+ * The master reference stays encrypted in the returned row — decrypt it with
+ * `decryptField(row.encrypted_master_ref, row.encryption_key_ref)` only once a
+ * licence has actually been paid for.
+ */
+export function getTrack(db: Database.Database, id: number): TrackRow | undefined {
+  return db.prepare("SELECT * FROM tracks WHERE id = ?").get(id) as TrackRow | undefined;
 }
 
-/** Records a buyer's request so the negotiation leaves an auditable trail. */
-export function insertQuery(
+/** The catalogue as a buyer's agent browses it, oldest first. */
+export function listTracks(db: Database.Database): TrackRow[] {
+  return db.prepare("SELECT * FROM tracks ORDER BY id").all() as TrackRow[];
+}
+
+/** Records a licence request so the negotiation leaves an auditable trail. */
+export function insertLicence(
   db: Database.Database,
-  buyerAgentId: string,
-  criteria: object,
-  price: number,
-  status: QueryStatus = "pending",
+  licence: {
+    trackId: number;
+    buyerUaid: string;
+    shares: BasisPoints;
+    licenceType: string;
+    territory: string;
+    useCase: string;
+    price: number;
+    status?: LicenceStatus;
+  },
 ): number {
   const result = db
     .prepare(
-      "INSERT INTO queries (buyer_agent_id, criteria, price, status) VALUES (?, ?, ?, ?)",
+      `INSERT INTO licences
+         (track_id, buyer_uaid, shares, licence_type, territory, use_case, price, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(buyerAgentId, JSON.stringify(criteria), price, status);
+    .run(
+      licence.trackId,
+      licence.buyerUaid,
+      licence.shares,
+      licence.licenceType,
+      licence.territory,
+      licence.useCase,
+      licence.price,
+      licence.status ?? "pending",
+    );
   return Number(result.lastInsertRowid);
 }
 
-/** Advances a query's status, attaching the payment transaction once there is one. */
-export function updateQueryStatus(
+/** Advances a licence's status, attaching the payment transaction once there is one. */
+export function updateLicenceStatus(
   db: Database.Database,
   id: number,
-  status: QueryStatus,
+  status: LicenceStatus,
   txHash?: string,
 ): void {
-  db.prepare("UPDATE queries SET status = ?, tx_hash = COALESCE(?, tx_hash) WHERE id = ?").run(
+  db.prepare("UPDATE licences SET status = ?, tx_hash = COALESCE(?, tx_hash) WHERE id = ?").run(
     status,
     txHash ?? null,
     id,
   );
+}
+
+/** Records the HTS certificate NFT minted for a granted licence. */
+export function setLicenceCertificate(
+  db: Database.Database,
+  id: number,
+  certificateSerial: string,
+): void {
+  db.prepare("UPDATE licences SET certificate_serial = ? WHERE id = ?").run(
+    certificateSerial,
+    id,
+  );
+}
+
+/**
+ * Takes `shares` out of a track's remaining capacity.
+ *
+ * Called **only on completion** — never on acceptance. An accepted offer is a
+ * promise the buyer may still walk away from, and reserving there would let a
+ * buyer exhaust a track by negotiating and never paying.
+ *
+ * The guard lives in the `WHERE` clause rather than in a read-then-write, so
+ * two settlements racing each other cannot both pass a capacity check and
+ * oversell the track; the loser matches no row and gets `false` back.
+ */
+export function reserveShares(
+  db: Database.Database,
+  trackId: number,
+  shares: BasisPoints,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE tracks SET available_shares = available_shares - ?
+        WHERE id = ? AND available_shares >= ?`,
+    )
+    .run(shares, trackId, shares);
+  return result.changes === 1;
 }
