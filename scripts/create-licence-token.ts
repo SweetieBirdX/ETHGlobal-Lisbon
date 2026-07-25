@@ -1,5 +1,6 @@
 import "dotenv/config";
 import {
+  CustomRoyaltyFee,
   TokenAssociateTransaction,
   TokenCreateTransaction,
   TokenType,
@@ -26,6 +27,10 @@ import { createBuyerClient, createSellerClient } from "../src/hedera/clients.js"
 const TOKEN_NAME = "Music Licence Certificate";
 const TOKEN_SYMBOL = "MLIC";
 
+/** The rights holder's cut of any onward sale of a certificate, in percent. */
+const ROYALTY_NUMERATOR = 5;
+const ROYALTY_DENOMINATOR = 100;
+
 async function main(): Promise<void> {
   if (process.env.HTS_LICENCE_TOKEN_ID && process.env.FORCE !== "1") {
     console.log(
@@ -40,6 +45,26 @@ async function main(): Promise<void> {
   const buyer = createBuyerClient();
 
   try {
+    /**
+     * A 5% royalty to the rights holder on any onward sale of a certificate.
+     *
+     * Deliberately **no fallback fee**. A fallback is charged to the receiver
+     * when an NFT moves with no fungible value alongside it — which is exactly
+     * what our own delivery transfer is (treasury → the account that paid,
+     * settled separately over x402). With a fallback the buyer would be
+     * charged a second time on every licence delivery; without one, delivery
+     * is free and the royalty only bites when the certificate is genuinely
+     * resold for value.
+     *
+     * Baked in at creation with no fee schedule key, so the terms cannot be
+     * changed after the fact — a buyer can read them off the token and know
+     * they will still hold.
+     */
+    const royalty = new CustomRoyaltyFee()
+      .setNumerator(ROYALTY_NUMERATOR)
+      .setDenominator(ROYALTY_DENOMINATOR)
+      .setFeeCollectorAccountId(seller.operatorAccountId!);
+
     // The seller is treasury and holds the supply key: only the rights
     // holder's agent can issue certificates. No admin key — the collection is
     // immutable.
@@ -49,6 +74,7 @@ async function main(): Promise<void> {
       .setTokenType(TokenType.NonFungibleUnique)
       .setTreasuryAccountId(seller.operatorAccountId!)
       .setSupplyKey(seller.operatorPublicKey!)
+      .setCustomFees([royalty])
       .execute(seller);
 
     const createReceipt = await createResponse.getReceipt(seller);
@@ -61,6 +87,10 @@ async function main(): Promise<void> {
 
     console.log(`NFT collection created: ${tokenId.toString()} ("${TOKEN_NAME}" / ${TOKEN_SYMBOL})`);
     console.log(`Treasury / supply key:  ${seller.operatorAccountId!.toString()} (seller)`);
+    console.log(
+      `Royalty: ${ROYALTY_NUMERATOR}/${ROYALTY_DENOMINATOR} ` +
+        `(${(ROYALTY_NUMERATOR / ROYALTY_DENOMINATOR) * 100}%) to ${seller.operatorAccountId!.toString()}, no fallback fee`,
+    );
     console.log(`HashScan: https://hashscan.io/testnet/token/${tokenId.toString()}`);
 
     // Hedera accounts only hold tokens they have associated with, so the buyer
