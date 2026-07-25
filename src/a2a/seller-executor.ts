@@ -105,9 +105,9 @@ export interface NegotiationResult {
  */
 export const DEFAULT_POLICY_STATEMENT =
   process.env.POLICY_STATEMENT ??
-  "You can sell aggregated statistics from my running and cycling data — performance scores and " +
-    "session counts only — to verified research companies, minimum 0.4 HBAR per query. " +
-    "Never share my heart rate, and never any health or medication data.";
+  "You can grant sync and sampling licences on my tracks to verified buyers, at least " +
+    "0.001 HBAR per share, up to 5000 shares per licence. Never license my music for " +
+    "political advertising.";
 
 let cachedPolicy: LicencePolicy | null = null;
 

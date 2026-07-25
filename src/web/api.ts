@@ -9,6 +9,7 @@ import {
 import { quotePrice } from "../data/catalog.js";
 import { listTracks, openDatabase, type LicenceRow } from "../data/db.js";
 import { certificateTokenId } from "../hedera/certificate.js";
+import { fetchTopicMessages, type TopicMessage } from "../hedera/mirror.js";
 import { getBuyerUaid, getSellerUaid } from "../identity/agent-ids.js";
 import { parsePolicy } from "../policy/parser.js";
 import type { LicenceGrant } from "../types/marketplace.js";
@@ -30,14 +31,6 @@ let currentStatement = DEFAULT_POLICY_STATEMENT;
 
 export function getCurrentStatement(): string {
   return currentStatement;
-}
-
-const MIRROR_NODE = "https://testnet.mirrornode.hedera.com";
-
-interface MirrorTopicMessage {
-  sequence_number: number;
-  consensus_timestamp: string;
-  message: string;
 }
 
 export interface AuditEntry {
@@ -69,13 +62,13 @@ export function shortUaid(uaid: string): string {
  * writes. All of it is real history, so the view reads both rather than
  * assuming its own format.
  */
-function toAuditEntry(message: MirrorTopicMessage): AuditEntry {
-  const text = Buffer.from(message.message, "base64").toString("utf8");
-  const seconds = Number(message.consensus_timestamp.split(".")[0]);
+function toAuditEntry(message: TopicMessage): AuditEntry {
+  const { text, json: parsedJson } = message;
+  const seconds = Number(message.consensusTimestamp.split(".")[0]);
   const timestamp = new Date(seconds * 1000).toISOString();
 
-  try {
-    const parsed = JSON.parse(text) as Record<string, unknown>;
+  if (parsedJson) {
+    const parsed = parsedJson;
     const event = String(parsed["event"] ?? "event");
     const uaid = parsed["buyerUaid"] ?? parsed["agentUaid"] ?? parsed["subjectUaid"];
     const detail = [
@@ -95,22 +88,22 @@ function toAuditEntry(message: MirrorTopicMessage): AuditEntry {
       .join(" · ");
 
     return {
-      sequenceNumber: message.sequence_number,
+      sequenceNumber: message.sequenceNumber,
       timestamp,
       kind: "json",
       summary: detail ? `${event} — ${detail}` : event,
       payload: parsed,
     };
-  } catch {
-    // The hook writes multi-line prose; the first line carries the substance.
-    return {
-      sequenceNumber: message.sequence_number,
-      timestamp,
-      kind: "text",
-      summary: text.split("\n")[0]!.trim().slice(0, 160),
-      payload: text,
-    };
   }
+
+  // The hook writes multi-line prose; the first line carries the substance.
+  return {
+    sequenceNumber: message.sequenceNumber,
+    timestamp,
+    kind: "text",
+    summary: text.split("\n")[0]!.trim().slice(0, 160),
+    payload: text,
+  };
 }
 
 /** "500 shares (5%) sync · film" — the licence as a person would describe it. */
@@ -422,24 +415,15 @@ export function createApiRouter(): Router {
     }
 
     try {
-      const response = await fetch(
-        `${MIRROR_NODE}/api/v1/topics/${topicId}/messages?order=desc&limit=25`,
-        { signal: AbortSignal.timeout(15_000) },
-      );
-
-      if (!response.ok) {
-        res.status(502).json({
-          error: `Mirror node responded ${response.status} for topic ${topicId}.`,
-        });
-        return;
-      }
-
-      const body = (await response.json()) as { messages?: MirrorTopicMessage[] };
+      // Through fetchTopicMessages rather than a raw fetch: messages larger
+      // than 1024 bytes are split into chunks on the way onto the topic, and
+      // the panel would otherwise render each fragment as its own garbage row.
+      const messages = await fetchTopicMessages(40, topicId);
 
       res.json({
         topicId,
         hashscanUrl: `https://hashscan.io/testnet/topic/${topicId}`,
-        entries: (body.messages ?? []).map(toAuditEntry),
+        entries: messages.slice(0, 25).map(toAuditEntry),
       });
     } catch (error) {
       res.status(502).json({
