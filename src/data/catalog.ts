@@ -3,8 +3,9 @@ import {
   TERRITORIES,
   USE_CASES,
   type AvailabilityResult,
+  type LicenceGrant,
 } from "../types/marketplace.js";
-import { getTrack, openDatabase } from "./db.js";
+import { decryptField, getTrack, openDatabase, type LicenceRow } from "./db.js";
 
 /**
  * Availability and pricing over the track catalogue. Replaces `aggregate.ts`.
@@ -34,6 +35,19 @@ export class UnknownTrackError extends Error {
   constructor(readonly trackId: number) {
     super(`Track ${trackId} is not in the catalogue.`);
     this.name = "UnknownTrackError";
+  }
+}
+
+/** Thrown when a grant is asked for a licence that has not been paid for. */
+export class LicenceNotGrantableError extends Error {
+  constructor(
+    readonly licenceId: number,
+    readonly status: string,
+  ) {
+    super(
+      `Licence ${licenceId} is '${status}' — a grant only exists for a licence that has been accepted and paid.`,
+    );
+    this.name = "LicenceNotGrantableError";
   }
 }
 
@@ -105,6 +119,66 @@ export async function quotePrice(
     const track = getTrack(db, trackId);
     if (!track) throw new UnknownTrackError(trackId);
     return Number((track.base_price_per_share * shares).toFixed(8));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Builds the deliverable a buyer receives on HTTP 200 — the licence grant.
+ *
+ * This is the one place the master reference is ever decrypted, and it happens
+ * in memory on the way into the response: the catalogue row keeps only the
+ * ciphertext, nothing here writes the plaintext anywhere, and the function
+ * refuses outright unless the licence has actually been accepted and paid for.
+ * That is the project's original claim — the protected asset only exists for a
+ * buyer post-payment — carried over intact from the fitness version.
+ *
+ * @throws {LicenceNotGrantableError} for a licence that is pending or declined.
+ * @throws {UnknownTrackError} if the licence's track has gone missing.
+ */
+export async function buildLicenceGrant(
+  licenceId: number,
+  dbPath?: string,
+): Promise<LicenceGrant> {
+  const db = openDatabase(dbPath);
+  try {
+    const licence = db
+      .prepare("SELECT * FROM licences WHERE id = ?")
+      .get(licenceId) as LicenceRow | undefined;
+    if (!licence) throw new LicenceNotGrantableError(licenceId, "missing");
+    if (licence.status !== "accepted" && licence.status !== "completed") {
+      throw new LicenceNotGrantableError(licenceId, licence.status);
+    }
+
+    const track = getTrack(db, licence.track_id);
+    if (!track) throw new UnknownTrackError(licence.track_id);
+
+    const grant: LicenceGrant = {
+      licenceId: licence.id,
+      trackId: track.id,
+      title: track.title,
+      artist: track.artist,
+      shares: licence.shares,
+      /** Basis points to whole percent: 500 shares of 10000 is 5%. */
+      sharePercent: licence.shares / 100,
+      licenceType: licence.licence_type,
+      territory: licence.territory,
+      useCase: licence.use_case,
+      // The grant is minted at delivery time — this function runs once, on the
+      // paid 200 — so "granted" is now, not when the request row was created.
+      grantedAt: new Date().toISOString(),
+      masterRef: decryptField(track.encrypted_master_ref, track.encryption_key_ref),
+    };
+
+    // The row stores the serial as TEXT (mirroring the old receipt_serial);
+    // the frozen grant shape wants a number, so convert at this boundary.
+    if (licence.certificate_serial !== null) {
+      const serial = Number(licence.certificate_serial);
+      if (Number.isFinite(serial)) grant.certificateSerial = serial;
+    }
+
+    return grant;
   } finally {
     db.close();
   }
