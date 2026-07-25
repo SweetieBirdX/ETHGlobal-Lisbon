@@ -7,29 +7,30 @@ import {
 import { createBuyerClient, createSellerClient } from "../src/hedera/clients.js";
 
 /**
- * Creates the "Data Access Receipt" NFT collection, once per environment.
+ * Creates the "Music Licence Certificate" NFT collection, once per environment.
  *
  * After every completed sale the seller mints one NFT from this collection to
- * the account that paid, with metadata tying the payment, the HCS audit entry
- * and the compliance attestation to a single token the buyer holds. This
- * script is the one-time setup behind that: create the collection, associate
- * the demo buyer so it can receive from it, print the id for `.env`.
+ * the account that paid — the on-chain half of the licence itself, with
+ * metadata naming the track, the licensed shares, the licence type and the
+ * HCS audit entry. This script is the one-time setup behind that: create the
+ * collection, associate the demo buyer so it can receive from it, print the
+ * id for `.env`.
  *
- *   npx tsx scripts/create-receipt-token.ts
+ *   npx tsx scripts/create-licence-token.ts
  *
  * Unlike a topic, an NFT collection is not disposable — every run mints a NEW
- * collection and orphans the old one's receipts — so the script refuses to run
- * when HTS_RECEIPT_TOKEN_ID is already set, unless FORCE=1.
+ * collection and orphans the old one's certificates — so the script refuses to
+ * run when HTS_LICENCE_TOKEN_ID is already set, unless FORCE=1.
  */
 
-const TOKEN_NAME = "Data Access Receipt";
-const TOKEN_SYMBOL = "RCPT";
+const TOKEN_NAME = "Music Licence Certificate";
+const TOKEN_SYMBOL = "MLIC";
 
 async function main(): Promise<void> {
-  if (process.env.HTS_RECEIPT_TOKEN_ID && process.env.FORCE !== "1") {
+  if (process.env.HTS_LICENCE_TOKEN_ID && process.env.FORCE !== "1") {
     console.log(
-      `HTS_RECEIPT_TOKEN_ID is already set (${process.env.HTS_RECEIPT_TOKEN_ID}) — the collection exists.\n` +
-        `Running again would create a second collection and orphan the receipts in this one.\n` +
+      `HTS_LICENCE_TOKEN_ID is already set (${process.env.HTS_LICENCE_TOKEN_ID}) — the collection exists.\n` +
+        `Running again would create a second collection and orphan the certificates in this one.\n` +
         `Set FORCE=1 if that is genuinely what you want.`,
     );
     return;
@@ -39,8 +40,9 @@ async function main(): Promise<void> {
   const buyer = createBuyerClient();
 
   try {
-    // The seller is treasury and holds the supply key: only the data owner's
-    // agent can issue receipts. No admin key — the collection is immutable.
+    // The seller is treasury and holds the supply key: only the rights
+    // holder's agent can issue certificates. No admin key — the collection is
+    // immutable.
     const createResponse = await new TokenCreateTransaction()
       .setTokenName(TOKEN_NAME)
       .setTokenSymbol(TOKEN_SYMBOL)
@@ -74,7 +76,7 @@ async function main(): Promise<void> {
     );
     console.log("");
     console.log("Add this line to your .env:");
-    console.log(`HTS_RECEIPT_TOKEN_ID=${tokenId.toString()}`);
+    console.log(`HTS_LICENCE_TOKEN_ID=${tokenId.toString()}`);
   } finally {
     seller.close();
     buyer.close();
@@ -82,6 +84,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error("Receipt collection setup failed:", error);
+  console.error("Licence collection setup failed:", error);
   process.exit(1);
 });
