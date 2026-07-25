@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 0 — Project Skeleton (in progress, 0.1–0.2 done)
+**Active phase:** Phase 0 — Project Skeleton (in progress, 0.1–0.3 done)
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -19,7 +19,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 ### Phase 0 — Project Skeleton
 - [x] 0.1 Repo and base files
 - [x] 0.2 package.json and TypeScript setup
-- [ ] 0.3 Install dependencies
+- [x] 0.3 Install dependencies
 - [ ] 0.4 Folder structure
 - [ ] 0.5 .env.example
 - [ ] Manual: two testnet accounts opened, `.env` filled in
@@ -104,6 +104,17 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (3)
+**Completed:** Phase 0.3
+**Files changed:** `package.json`, `package-lock.json`
+**Installed (runtime):** `@hiero-ledger/sdk@2.86.2`, `@hashgraph/hedera-agent-kit@4.0.0`, `@hashgraph/hedera-agent-kit-langchain@1.0.0`, `@a2a-js/sdk@1.0.0`, `express@5.2.1`, `langchain@1.5.4`, `@langchain/openai@1.5.5`, `dotenv@17.4.2`, `ethers@6.17.0`. **(dev):** `vitest@4.1.10`, `@types/express` (needed because express 5 ships no bundled types). Also added npm scripts `test` → `vitest run`, `build` → `tsc`.
+**Verification:** Throwaway `scripts/_depcheck.ts` imported all nine runtime packages under ESM/NodeNext and asserted a real export from each (`Client.forTestnet`, `HederaLangchainToolkit`, `createAgent`, `ChatOpenAI`, `ethers.getAddress`, …) — all OK. `npx tsc --noEmit` clean. `npx vitest run` passed a smoke test building a Hedera testnet client (1/1). All throwaway files deleted.
+**What the next person should do:** Phase 0.4 — folder structure (`src/hedera`, `src/x402`, `src/a2a`, `src/erc8004`, `src/data`, `src/policy`, `src/web`, `scripts`, `docs`).
+**Known issues / things to watch for:**
+- `npm install -D` spuriously wrote `esbuild` and `undici-types` into `dependencies`; removed via `npm pkg delete` and re-installed. If they reappear after a future install, delete them again — they are transitive deps of vitest/@types/node, not direct ones.
+- `npm audit` reports 13 vulns (9 moderate / 4 high), all inside pinned transitive deps of `@hiero-ledger/sdk` and `@hashgraph/hedera-agent-kit` (`ws`, older `ethers`, `uuid`). **No fix available** and `npm audit fix --force` would downgrade/break the Hedera SDKs — leave them alone for the hackathon; testnet-only, no real funds.
+- x402 packages are deliberately not installed yet — they come in Phase 3.
 
 ### 2026-07-25 — Emre — Claude Code session (2)
 **Completed:** Phase 0.2
