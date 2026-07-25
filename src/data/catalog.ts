@@ -1,10 +1,156 @@
-/** Track catalogue: availability + price calculation. Replaces aggregate.ts. Owner: P2. */
+import {
+  LICENCE_TYPES,
+  TERRITORIES,
+  USE_CASES,
+  type AvailabilityResult,
+} from "../types/marketplace.js";
+import { getTrack, openDatabase } from "./db.js";
 
-import type { AvailabilityResult } from "../types/marketplace.js";
+/**
+ * Availability and pricing over the track catalogue. Replaces `aggregate.ts`.
+ *
+ * Gate 3 of the negotiation lives here: where the fitness version asked "is
+ * this cohort large enough to report on without exposing anyone?", the music
+ * version asks "does this track still have that many shares to license?". Same
+ * position in the flow, same error-out-of-a-check shape, different question.
+ */
 
+/** Thrown when a track has fewer shares left than a licence asks for. */
+export class InsufficientSharesError extends Error {
+  constructor(
+    readonly requested: number,
+    readonly available: number,
+    readonly trackId: number,
+  ) {
+    super(
+      `Track ${trackId} has ${available} shares available but the licence asks for ${requested} — reduce the share count or pick another track.`,
+    );
+    this.name = "InsufficientSharesError";
+  }
+}
+
+/** Thrown when a licence names a track the catalogue does not hold. */
+export class UnknownTrackError extends Error {
+  constructor(readonly trackId: number) {
+    super(`Track ${trackId} is not in the catalogue.`);
+    this.name = "UnknownTrackError";
+  }
+}
+
+/**
+ * The whitelisted, normalised form of a licence request.
+ *
+ * `LicenceOffer` minus the price: the price is what gets negotiated, these
+ * fields are what the x402 gate compares between the negotiated row and the
+ * incoming request.
+ */
+export interface LicenceCriteria {
+  trackId?: number;
+  shares?: number;
+  licenceType?: string;
+  territory?: string;
+  useCase?: string;
+}
+
+/**
+ * Answers whether a track can still grant `shares`.
+ *
+ * Deliberately a report, not a verdict: `sufficient: false` comes back as data
+ * so the seller can refuse with the numbers in hand ("only 800 of 10000 left"),
+ * which is what makes the refusal demonstrable rather than a bare no.
+ *
+ * @throws {UnknownTrackError} when the track does not exist — that is a
+ * different refusal from "not enough left", and gate 3 words them differently.
+ */
 export async function checkAvailability(
   trackId: number,
   shares: number,
+  dbPath?: string,
 ): Promise<AvailabilityResult> {
-  throw new Error("TODO(P2): not implemented");
+  const db = openDatabase(dbPath);
+  try {
+    const track = getTrack(db, trackId);
+    if (!track) throw new UnknownTrackError(trackId);
+
+    return {
+      trackId: track.id,
+      title: track.title,
+      artist: track.artist,
+      totalShares: track.total_shares,
+      availableShares: track.available_shares,
+      requestedShares: shares,
+      sufficient: shares > 0 && shares <= track.available_shares,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Prices a licence: `basePricePerShare × shares`, in HBAR.
+ *
+ * Rounded to 8 decimal places — one tinybar is 10⁻⁸ ℏ, so anything finer than
+ * this cannot settle anyway, and unrounded float products (0.00082 × 500 =
+ * 0.41000000000000003) would fail equality checks downstream.
+ *
+ * @throws {UnknownTrackError} when the track does not exist.
+ */
+export async function quotePrice(
+  trackId: number,
+  shares: number,
+  dbPath?: string,
+): Promise<number> {
+  const db = openDatabase(dbPath);
+  try {
+    const track = getTrack(db, trackId);
+    if (!track) throw new UnknownTrackError(trackId);
+    return Number((track.base_price_per_share * shares).toFixed(8));
+  } finally {
+    db.close();
+  }
+}
+
+/** Parses a positive integer out of an untrusted query value, else undefined. */
+function parsePositiveInt(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/** Lowercases and trims a string value, keeping it only if the whitelist has it. */
+function parseEnumValue(value: unknown, allowed: readonly string[]): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalised = value.trim().toLowerCase();
+  return allowed.includes(normalised) ? normalised : undefined;
+}
+
+/**
+ * Reads licence criteria out of untrusted query parameters.
+ *
+ * Strictly whitelist-shaped: the five known fields are taken, everything else
+ * is ignored, and a value outside the frozen vocabularies is dropped rather
+ * than passed through. The x402 binding gate compares the negotiated criteria
+ * against the requested ones as whole objects, so **both sides must normalise
+ * identically** — same lowercasing, same trimming, same drops — or the same
+ * licence written two ways would look like a mismatch.
+ */
+export function parseLicenceCriteria(query: Record<string, unknown>): LicenceCriteria {
+  const criteria: LicenceCriteria = {};
+
+  const trackId = parsePositiveInt(query["trackId"]);
+  if (trackId !== undefined) criteria.trackId = trackId;
+
+  const shares = parsePositiveInt(query["shares"]);
+  if (shares !== undefined) criteria.shares = shares;
+
+  const licenceType = parseEnumValue(query["licenceType"], LICENCE_TYPES);
+  if (licenceType !== undefined) criteria.licenceType = licenceType;
+
+  const territory = parseEnumValue(query["territory"], TERRITORIES);
+  if (territory !== undefined) criteria.territory = territory;
+
+  const useCase = parseEnumValue(query["useCase"], USE_CASES);
+  if (useCase !== undefined) criteria.useCase = useCase;
+
+  return criteria;
 }
