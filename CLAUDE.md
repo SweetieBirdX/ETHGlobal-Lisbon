@@ -2,6 +2,10 @@
 
 This file provides shared context for every Claude session working on this repo (different accounts, different people). **Read this file and `PLAN.md` before starting any work.** When you finish a piece of work, check off the relevant item in `PLAN.md` and add a handoff note (details inside `PLAN.md`).
 
+## General Rule: At the End of Every Prompt
+
+Never commit before confirming the code runs and produces the expected output. In order: (1) apply the prompt, (2) run and test it, (3) confirm the expected result, (4) commit with the step's specific commit message, (5) move to the next prompt. If you get stuck on a prompt, don't simplify it without asking and informing the user.
+
 ---
 
 ## Project Summary
