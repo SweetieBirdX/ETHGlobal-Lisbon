@@ -2,6 +2,44 @@
 
 This file provides shared context for every Claude session working on this repo (different accounts, different people). **Read this file and `PLAN.md` before starting any work.** When you finish a piece of work, check off the relevant item in `PLAN.md` and add a handoff note (details inside `PLAN.md`).
 
+---
+
+## ⛔ STOP — Read This First: Sync Before You Touch Anything
+
+**Two people work this repo in parallel, from two different machines and two different Claude
+accounts.** The working copy goes stale within minutes. Editing or committing on top of a stale
+copy is what creates merge conflicts — so the sync check below is **mandatory at two separate
+moments in every session, every single time. It is never optional and never "probably fine."**
+
+**Moment 1 — before your first edit of the session (and again after any long pause):**
+
+```bash
+git fetch --quiet && git status -sb    # "[behind N]" → STOP, pull before anything else
+git pull --rebase                      # run this if behind
+```
+
+**Moment 2 — immediately before every `git commit`** (the other person may have pushed while you
+were working — this is the check people skip and it is the one that causes conflicts):
+
+```bash
+git fetch --quiet && git status -sb
+git pull --rebase                      # run this if behind, THEN commit
+git push                               # push right after committing, never batch commits up
+```
+
+Non-negotiables that follow from this:
+
+- **Never** edit a file, and **never** commit, without having run the check in that same session phase.
+- If the pull brings in changes to a file you were about to edit or had already read,
+  **re-read that file** before continuing — your mental model of it is out of date.
+- If a rebase conflicts, **resolve the conflict first**, before writing any new code — never
+  work around it or write new code alongside an unresolved conflict.
+- Push straight after each commit. Unpushed local commits are invisible to the other person and
+  turn into conflicts the longer they sit.
+- Never use `git push --force` on `main`; it will destroy the other person's work.
+
+---
+
 ## General Rule: At the End of Every Prompt
 
 Never commit before confirming the code runs and produces the expected output. In order: (1) apply the prompt, (2) run and test it, (3) confirm the expected result, (4) commit with the step's specific commit message, (5) move to the next prompt. If you get stuck on a prompt, don't simplify it without asking and informing the user.
@@ -96,19 +134,8 @@ Full list in `.env.example`. The critical ones: `SELLER_ACCOUNT_ID` / `SELLER_PR
 ## Working Rules (for every Claude session)
 
 **Rule 0 — sync with the remote before touching anything, and again before every commit.**
-Two people work this repo in parallel, so the working copy goes stale fast. Both moments are
-mandatory, not one:
-
-```bash
-# before you start editing, and again immediately before you commit
-git fetch --quiet && git status -sb          # "[behind N]" means STOP and pull first
-git pull --rebase                            # only if behind
-```
-
-If `git status -sb` reports `[behind N]`, **pull before doing anything else** — never edit or
-commit on top of a stale copy. If the pull brings in changes to a file you were about to edit,
-re-read that file before continuing; your mental model of it is out of date. When a rebase
-conflicts, resolve it before writing new code, never alongside it.
+See **"⛔ STOP — Read This First"** at the top of this file. That check is mandatory at both
+moments in every session; nothing below overrides it.
 
 1. Before starting work, read `PLAN.md` — see which phase we're on and the last handoff note.
 2. Don't skip ahead in `prompt-list.md`. Don't move to the next phase before the current one is done (there's a dependency chain).
