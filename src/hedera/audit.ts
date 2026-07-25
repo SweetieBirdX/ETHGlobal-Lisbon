@@ -22,7 +22,7 @@ export interface AuditLogResult {
   transactionId: string;
 }
 
-function requireAuditTopicId(): string {
+export function requireAuditTopicId(): string {
   const topicId = process.env.HCS_AUDIT_TOPIC_ID;
   if (!topicId) {
     throw new Error(

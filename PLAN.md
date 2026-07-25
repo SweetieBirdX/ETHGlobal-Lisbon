@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 1 — Hedera Base Layer (1.1-1.4 done; next: 1.5 simple HBAR transfer test)
+**Active phase:** Phase 2 — Hedera Agent Kit complete (2.1-2.3 done). Next: Phase 3.1 — mock data provider.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -29,12 +29,12 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 1.2 Balance query test script
 - [x] 1.3 Create HCS audit topic (→ write `HCS_AUDIT_TOPIC_ID` to `.env`!)
 - [x] 1.4 HCS message submission helper function
-- [ ] 1.5 Simple HBAR transfer test
+- [x] 1.5 Simple HBAR transfer test
 
 ### Phase 2 — Hedera Agent Kit
-- [ ] 2.1 Agent Kit toolkit setup
-- [ ] 2.2 Test agent: balance query
-- [ ] 2.3 HCSAuditTrailHook integration
+- [x] 2.1 Agent Kit toolkit setup
+- [x] 2.2 Test agent: balance query
+- [x] 2.3 HCSAuditTrailHook integration
 
 ### Phase 3 — x402 Payment Layer
 - [ ] 3.1 Mock data provider
@@ -104,6 +104,45 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (11)
+**Completed:** Phase 2.3 — Phase 2 is done
+**Files changed:** `src/hedera/agentkit.ts` — `createSellerToolkit` now builds an `HcsAuditTrailHook(AUDITED_TOOLS, requireAuditTopicId(), client)` and passes it through `configuration.context.hooks`; exports the `AUDITED_TOOLS` list (`get_hbar_balance_query_tool`, `transfer_hbar_tool`, `submit_topic_message_tool`). `src/hedera/audit.ts` — `requireAuditTopicId()` is now exported so the topic id resolution (and its error message) is shared rather than duplicated.
+**Verification:** `npx tsc --noEmit` clean. Mirror node showed topic `0.0.9738154` at **sequence 1** before the run; re-ran `npx tsx scripts/test-agent-kit.ts` (exit 0, same correct balance answer); mirror node then showed **sequence 2**, with the new message being the hook's own record: `Agent executed tool get_hbar_balance_query_tool on with params {"accountId":"0.0.9696085"} ... Account ID: 0.0.9696085`. Visible at https://hashscan.io/testnet/topic/0.0.9738154 ("on with params" is a typo in the vendor's template, not ours.)
+**What the next person should do:** Phase 3.1 — mock data provider. Also install the x402 packages when starting Phase 3.
+**Known issues / things to watch for:**
+- **`package.json` changes from 2.2 are still uncommitted** (`@langchain/groq` dependency + the `overrides` pin on `@langchain/core`). Commit `881b728` took only `scripts/test-agent-kit.ts`, so a fresh clone would neither install Groq nor get the dedupe, and `scripts/test-agent-kit.ts` would fail to typecheck with TS2769. Commit `package.json` + `package-lock.json`.
+- The prompt referenced `docs/HOOKS_AND_POLICIES.md`; that file **does not exist in this repo** (`docs/` holds only `.gitkeep`). The hook was implemented from the package's own type declarations instead: the export is `HcsAuditTrailHook` (lower-case `cs`), not `HCSAuditTrailHook`, and it lives in `@hashgraph/hedera-agent-kit/hooks`.
+- The hook only fires for tools whose **name** appears in `relevantTools` — the tool `name` equals its `method`, so the strings in `AUDITED_TOOLS` must match tool names exactly; a typo silently disables auditing.
+- `HcsAuditTrailHook` throws if the toolkit is ever switched to `AgentMode.RETURN_BYTES` — it is AUTONOMOUS-only by design.
+- Each audited tool call now costs an extra HCS message fee, and the hook writes the vendor's own plain-text format (not the JSON that `logAuditEvent` writes). The topic therefore holds two message shapes; the frontend audit view in Phase 8.5 has to tolerate both.
+
+### 2026-07-25 — Emre — Claude Code session (10)
+**Completed:** Phase 2.2
+**Files changed:** `scripts/test-agent-kit.ts` (new) — builds the seller toolkit, wraps it in `createAgent({ model: new ChatGroq({ model: "llama-3.3-70b-versatile" }), tools, systemPrompt })`, asks "What's my HBAR balance?", prints every tool message plus the final answer, and **exits 1 if no tool was called** (an answer with no tool call means the model invented the number). `package.json` — added `@langchain/groq@1.3.1` and an `overrides` entry pinning `@langchain/core` to `1.2.3`.
+**Verification:** `npx tsc --noEmit` clean. `npx tsx scripts/test-agent-kit.ts` against real testnet + Groq:
+```
+Tools:    3 of 43 (get_hbar_balance_query_tool, get_account_query_tool, get_account_token_balances_query_tool)
+[tool] get_hbar_balance_query_tool: {"raw":{"accountId":"0.0.9696085","hbarBalance":"999.85216527"},...}
+Answer: Your HBAR balance is 999.85216527 HBAR.
+```
+Exit code 0. Separately re-confirmed the toolkit still loads all 43 tools after the `@langchain/core` override.
+**What the next person should do:** Phase 2.3 — `HCSAuditTrailHook`, imported from `@hashgraph/hedera-agent-kit/hooks` and attached via `configuration.context.hooks` in `src/hedera/agentkit.ts`.
+**Known issues / things to watch for:**
+- **Groq free tier is 12,000 tokens/minute and all 43 tool schemas cost ~54,000 tokens per request** — passing the full toolkit to an LLM returns `413 rate_limit_exceeded`. The test script therefore filters down to the three account-query tools. **Every later phase that gives an agent tools must do the same**: pass only the tools that phase needs, never `toolkit.getTools()` wholesale.
+- `@hashgraph/hedera-agent-kit-langchain` pins its own `@langchain/core@1.1.24` while `langchain@1.5.4` uses `1.2.3`. With both installed the toolkit's tools are **not type-compatible** with `createAgent` (`TS2769 ... Index signature for type 'string' is missing`), and two copies of core at runtime would break `instanceof` checks. Fixed with `"overrides": { "@langchain/core": "1.2.3" }` in `package.json` — do not remove it; re-run `npm install` if the error reappears.
+- `npm install` put `@langchain/groq` in `dependencies` while every other runtime package still sits in `devDependencies` (from pulled commit `0aa3820`). The split is now inconsistent — worth one cleanup commit.
+- `.env` was empty earlier in this session but is populated again; both testnet and Groq calls work.
+
+### 2026-07-25 — Emre — Claude Code session (9)
+**Completed:** Phase 2.1 (and wrote `scripts/test-transfer.ts` for 1.5, which was committed separately as `2f03539`)
+**Files changed:** `src/hedera/agentkit.ts` (new) — `createSellerToolkit(client?)` returns a `HederaLangchainToolkit` configured with `plugins: allCorePlugins` and `context.mode: AgentMode.AUTONOMOUS`. The client parameter defaults to `createSellerClient()`; pass one explicitly when you need to `client.close()` afterwards, otherwise the SDK's gRPC connections keep the process alive.
+**Verification:** `npx tsc --noEmit` clean. A throwaway `scripts/_toolkitcheck.ts` built the toolkit against a locally generated ECDSA operator (no network, no real credentials — `.env` is empty on this machine) and called `getTools()`: **43 tools loaded**, including `transfer_hbar_tool`, `submit_topic_message_tool` and `get_hbar_balance_query_tool`; `AgentMode.AUTONOMOUS` resolves to `"autonomous"`. Throwaway deleted. Note: `scripts/test-transfer.ts` typechecks and its HashScan id conversion was unit-checked, but **it was never executed against testnet from this working copy** — `.env` has been empty here throughout.
+**What the next person should do:** Phase 2.2 — test agent that answers a balance question through the toolkit. Needs a working `.env` **and** an LLM key. Note the LLM provider is unsettled: `CLAUDE.md` says `@langchain/groq` + `GROQ_API_KEY`, but `package.json` still has `@langchain/openai` (Groq is not installed) and `.env.example` still says `OPENAI_API_KEY`. Resolve that before 2.2.
+**Known issues / things to watch for:**
+- **The prompt's import paths were wrong and were corrected:** `allCorePlugins` is not exported from `@hashgraph/hedera-agent-kit` — it lives in the `@hashgraph/hedera-agent-kit/plugins` subpath export. `AgentMode` *is* on the root. Same applies to `HCSAuditTrailHook` in 2.3: hooks are under `@hashgraph/hedera-agent-kit/hooks`.
+- `Configuration.context` also accepts `accountId`, `accountPublicKey`, `mirrornodeService` and `hooks` — 2.3 attaches the audit hook via `context.hooks`.
+- Leftover from the pull, still unresolved: every runtime dependency sits in `devDependencies` (commit `0aa3820`), and `.env.example` lost its explanatory comments (`eddab6d`).
 
 ### 2026-07-25 — Emre — Claude Code session (8b)
 **Completed:** Phase 1.4
