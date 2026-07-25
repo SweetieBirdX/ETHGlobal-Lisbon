@@ -132,6 +132,7 @@ Run the demo with **`npm run dev`**, not three separate terminals: the policy li
 ## Verifying it end to end
 
 ```bash
+npm test               # = test:e2e — needs a funded account, so it costs 0.5 ℏ
 npm run test:e2e       # full flow, both an accepted and a refused offer  (costs 0.5 ℏ)
 npm run test:errors    # network failure, timeout, insufficient balance, bad agent ids  (costs nothing)
 npm run test:binding   # the endpoint serves only what was negotiated, once  (costs 0.5 ℏ)

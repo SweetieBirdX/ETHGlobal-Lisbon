@@ -109,6 +109,15 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **Known issues / things to watch for:** ...
 ```
 
+### 2026-07-25 — Emre — Claude Code session (41)
+**Completed:** `npm test` fixed — it pointed at `vitest run` with no test files in the repo, so it exited 1 every time.
+**Files changed:** `package.json` — `"test": "npm run test:e2e"` (delegating rather than duplicating the command, so there stays one source of truth). `README.md`.
+**Verification:** ran it twice. **18/18 checks passed** and `npm test` → **exit 0** (checked directly, since the bug was an exit code, not the output). Payment `0.0.7162784@1784977703.508929562`, HCS seq 12, feedback #10.
+**Known issues / things to watch for:**
+- **`npm test` now costs 0.5 ℏ and needs a funded testnet account plus `.env`.** That is a surprising default for the command people run reflexively, and on a clean clone with no `.env` it fails on a missing environment variable rather than on a test. If a cheap default matters more than a thorough one, `test:errors` is the better target — 17/17, spends nothing, still exercises real registry and mirror-node calls. Say the word and I'll switch it.
+- **`vitest` is still in `devDependencies` and now provably unused** — nothing imports it and there is no `vitest.config`. Left in place because removing it churns `package-lock.json`; it is dead weight either way.
+- Running `npm test` appends a completed sale, an HCS message and a reputation entry every time, exactly like `test:e2e`. It is not a read-only command.
+
 ### 2026-07-25 — Emre — Claude Code session (40)
 **Completed:** Phase 7 **end-of-phase checkpoint**, and the fix to `full-e2e-test.ts` that was blocking it.
 **Files changed:** `scripts/verify-phase7.ts` (**new**). `scripts/full-e2e-test.ts` — the stale "no new query row" assertion **replaced**; `countQueries()` → `countCompleted()`. `package.json` — `npm run verify:phase7`.
