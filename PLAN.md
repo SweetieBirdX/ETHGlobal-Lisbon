@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 5 — ERC-8004 **complete** (5.1-5.5; **seller agentId 103, buyer agentId 104** on Hedera testnet). Next: Phase 6.1 — encrypted database schema.
+**Active phase:** Phase 6 — Off-chain Data + Policy Engine (6.1-6.2 done). Next: 6.3 — cohort aggregation function.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -58,8 +58,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 5.5 Reputation feedback submission
 
 ### Phase 6 — Off-chain Data + Policy Engine
-- [ ] 6.1 Encrypted database schema
-- [ ] 6.2 Mock user data
+- [x] 6.1 Encrypted database schema
+- [x] 6.2 Mock user data
 - [ ] 6.3 Cohort aggregation function
 - [ ] 6.4 Natural-language policy parser
 - [ ] 6.5 Policy wired into seller executor
@@ -104,6 +104,28 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (24)
+**Completed:** Phase 6.2
+**Files changed:** `scripts/seed-data.ts` (new) — generates **12** fitness records (`ageRange`, `activityType`, `weeklyActiveMinutes`, `weeklyDistanceKm`, `restingHeartRate`, `vo2max`, `avgSleepHours`, `performanceScore`) and inserts them through `insertUser`, so every row is encrypted on the way in. Exports the `FitnessRecord` type for 6.3.
+**Verification:** `npx tsc --noEmit` clean. Seeded, then a throwaway checked **14/14**: 12 users; every row decrypts; every row is `iv:tag:ciphertext` with a **unique IV**; no row (and no byte of `fitness-data.db` read raw) contains a plaintext field name; values are physiologically plausible; strength-training users have zero distance; **no medication/cycle/diagnosis fields** anywhere (scope rule); 3 age ranges and all 4 activity types present, so a cohort query has something to slice. Sample: running cohort = 4 users, avg score 79.1. Re-running the script is a no-op ("already holds 12 users"). Throwaway deleted.
+**What the next person should do:** Phase 6.3 — cohort aggregation: filter by criteria, return count + averages, and **refuse to answer for cohorts below a minimum size** so a "cohort" of one cannot be used to read an individual's record.
+**Known issues / things to watch for:**
+- The generator uses a **deterministic PRNG seeded with 20260725**, so every machine seeds the identical population and demo numbers stay stable between runs. Change the seed only if you want different data.
+- The script **refuses to re-seed** when users already exist (`FORCE=1` appends another 12). Appending twice would silently double the cohort sizes.
+- `performanceScore` is derived from `vo2max` and resting heart rate rather than drawn at random, so aggregates show a believable relationship instead of noise. It is a synthetic composite, not a real fitness metric — don't present it as one.
+- The database file is gitignored: a fresh clone must run this script before anything in Phase 6.3+ returns data.
+
+### 2026-07-25 — Emre — Claude Code session (23)
+**Completed:** Phase 6.1
+**Files changed:** `src/data/db.ts` (new) — `openDatabase(path)` creates `users(id, encrypted_fitness_data, encryption_key_ref)` and `queries(id, buyer_agent_id, criteria, price, status, tx_hash, created_at)` with a `CHECK` constraint on status (`pending|accepted|declined|paid|delivered`) and an index on `buyer_agent_id`; `encryptField`/`decryptField` do AES-256-GCM with a random 96-bit IV, storing `iv:authTag:ciphertext` in base64; helpers `insertUser`, `getUserData`, `insertQuery`, `updateQueryStatus`. `.env.example` — added `DATA_ENCRYPTION_KEY`. `.gitignore` — added `*.db`, `*.db-shm`, `*.db-wal`. `package.json` — `better-sqlite3@12.11.1` + `@types/better-sqlite3`.
+**Verification:** `npx tsc --noEmit` clean. A throwaway ran **18/18** assertions against an in-memory database: value round-trips; the same plaintext encrypts to different ciphertext each time (random IV); a single flipped bit in the ciphertext is **rejected by the GCM auth tag**; decrypting with a different `keyRef` fails; the row stored on disk contains no plaintext (`gHlb6bm1…:F4uHZgXN…:fg2hR9nA…`) and records only the key *reference*; query rows default to `pending` with `created_at` auto-filled, status transitions attach a `tx_hash`, an omitted hash is preserved via `COALESCE`, and an invalid status is rejected by the CHECK constraint. Throwaway deleted.
+**What the next person should do:** Phase 6.2 — mock user data seeded through `insertUser` (fitness/performance only; no medication or cycle data, per the scope decision).
+**Known issues / things to watch for:**
+- **`better-sqlite3@13` cannot be installed on this machine** — it has no Node 24 prebuild and falls back to `node-gyp`, which fails because Visual Studio 2026 is present but the **VC++ toolset is missing**. `@12.11.1` ships a working prebuild and was verified to load and run. Do not bump the major version without checking this again; `node:sqlite` (built into Node 24) is the fallback if a rebuild is ever forced.
+- **A new env var `DATA_ENCRYPTION_KEY` is required.** A random 32-byte base64 value was generated and appended to the local `.env`; `.env.example` documents it. Losing it makes every stored record unreadable — the auth tag guarantees failure rather than garbage.
+- Key derivation is `scryptSync(secret, keyRef)` with the **key ref used as the salt**, so the demo is reproducible across restarts. That is not production practice: a real deployment wants a per-record salt and a KMS, which is exactly what `encryption_key_ref` is a placeholder for.
+- The database file is gitignored, so a fresh clone starts empty and must run the 6.2 seed before any cohort query returns anything.
 
 ### 2026-07-25 — Emre — Claude Code session (22)
 **Completed:** Phase 5.5 — **Phase 5 is done**
