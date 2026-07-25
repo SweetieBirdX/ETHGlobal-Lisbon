@@ -119,6 +119,16 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **Known issues / things to watch for:** ...
 ```
 
+### 2026-07-25 — Emre — Claude Code session (49) — **PIVOT lane B** — P2.7 — **lane B prompts complete**
+**Completed:** P2.7 — the permanent catalogue test suite. `scripts/test-catalog.ts`, `npm run test:catalog`.
+**Files changed:** `scripts/test-catalog.ts` (**new**) — consolidates the P2.1–P2.5 throwaway checks into one kept suite; `package.json` — `test:catalog` script (committed alone and first, per rule 3).
+**Verification:** `npm run test:catalog` → **25/25**. Spends no HBAR: seeds its own throwaway db (`test-catalog.db`, deleted after) via the real seeder, plus three live Groq calls. Covers: availability at 799/800/801 of the scarce track's 800; the gate pattern throwing `InsufficientSharesError` with requested/available/trackId; pricing exact at 1/500/10000 shares and clean where the raw float product is noisy; a pending licence refusing a grant, a completed one decrypting to the seeded master ref while the row keeps ciphertext; the three policy parses (demo sentence exact, bare prohibition, invented type filtered); `parseLicenceCriteria` normalisation and the two-spellings determinism check.
+**What the next person should do:** Lane B's P2.x sequence is done. Remaining lane-B ownership per PIVOT-PLAN §4: `src/web/index.html` + `src/web/api.ts` panel copy (which also fixes `api.ts:376` still reading `HTS_RECEIPT_TOKEN_ID`). Lane A: integration in `seller-executor.ts` can now consume everything — `evaluateOffer` against `LicencePolicy`, `checkAvailability`/`InsufficientSharesError` as gate 3, `buildLicenceGrant` on the paid 200, `mintCertificate` + `setLicenceCertificate` post-sale.
+**Known issues / things to watch for:**
+- The suite needs `GROQ_API_KEY` and `DATA_ENCRYPTION_KEY` in `.env` (no Hedera vars). On a clean clone without those it fails on the missing env var, like the rest of the scripts.
+- It requires the model to parse the demo sentence **byte-exactly** — if Groq ever changes the model behind `llama-3.3-70b-versatile`, this is the check that would flake first; loosen to field-level asserts then, not before.
+- `test:catalog` is now the lane-B green suite alongside the two PIVOT-PLAN §6 keepers (`test:e2e`, `test:rounds` — both still red until lane A's integration lands).
+
 ### 2026-07-25 — Emre — Claude Code session (49) — **PIVOT lane B** — P2.6
 **Completed:** P2.6 — licence certificate NFT. `receipt.ts` → `certificate.ts`, `create-receipt-token.ts` → `create-licence-token.ts` (both `git mv`, history preserved).
 **Files changed:** `src/hedera/certificate.ts` — `mintReceipt` → `mintCertificate({tokenId, trackId, shares, licenceType, buyerAccountId, auditSequenceNumber?})`; metadata is `{"t":trackId,"sh":shares,"l":licenceType,"hcs":seq?}` (spec example is 36 bytes, widest realistic 52 — cap 100); the pre-network byte-cap assertion is kept; `certificateTokenId()` reads `HTS_LICENCE_TOKEN_ID`. `scripts/create-licence-token.ts` — collection "Music Licence Certificate" / `MLIC`, FORCE guard + buyer association kept, prints `HTS_LICENCE_TOKEN_ID`. `.env.example` — stale `HTS_RECEIPT_TOKEN_ID` line removed.
