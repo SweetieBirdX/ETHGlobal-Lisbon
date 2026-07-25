@@ -216,9 +216,10 @@ export interface CompletedSale {
 
 /**
  * Everything the seller does *after* a payment settles, in order:
- * take the shares out of the track's capacity, write the audit entry to HCS,
- * publish reputation feedback about the buyer, mint the licence certificate
- * NFT to the account that paid, then mark the licence complete in the ledger.
+ * write the audit entry to HCS, publish reputation feedback about the buyer,
+ * take the shares out of the track's capacity (only now — an accepted offer
+ * reserves nothing), mint the licence certificate NFT to the account that
+ * paid, then mark the licence complete in the ledger.
  *
  * Each step is attempted even if an earlier one failed — a reputation outage
  * should not cost the audit trail its record — and every failure is reported
@@ -266,18 +267,7 @@ export async function recordCompletedSale(
       errors,
     };
 
-    // 1. Capacity. Settlement is the moment shares actually leave the track —
-    //    reserving on acceptance would let a buyer exhaust a track by
-    //    negotiating and never paying. The WHERE-clause guard in reserveShares
-    //    is what loses a race gracefully instead of overselling.
-    if (!reserveShares(db, licence.track_id, licence.shares)) {
-      errors.push(
-        `Could not reserve ${licence.shares} shares of track ${licence.track_id} — ` +
-          "capacity was taken by a competing settlement.",
-      );
-    }
-
-    // 2. Audit trail on HCS — the public, tamper-evident record that this
+    // 1. Audit trail on HCS — the public, tamper-evident record that this
     //    exchange happened, carrying the attestation that admitted the buyer.
     const seller = createSellerClient();
     try {
@@ -301,7 +291,7 @@ export async function recordCompletedSale(
       seller.close();
     }
 
-    // 3. Reputation — the buyer paid as agreed, and the feedback cites the
+    // 2. Reputation — the buyer paid as agreed, and the feedback cites the
     //    transaction so the claim is checkable. Recorded on the HCS identity
     //    topic, keyed by the buyer's UAID.
     try {
@@ -313,6 +303,17 @@ export async function recordCompletedSale(
       result.feedbackIndex = String(feedback.sequenceNumber);
     } catch (error) {
       errors.push(`Reputation feedback failed: ${String(error).slice(0, 160)}`);
+    }
+
+    // 3. Capacity. Settlement is the moment shares actually leave the track —
+    //    reserving on acceptance would let a buyer exhaust a track by
+    //    negotiating and never paying. The WHERE-clause guard in reserveShares
+    //    is what loses a race gracefully instead of overselling.
+    if (!reserveShares(db, licence.track_id, licence.shares)) {
+      errors.push(
+        `Could not reserve ${licence.shares} shares of track ${licence.track_id} — ` +
+          "capacity was taken by a competing settlement.",
+      );
     }
 
     // 4. Certificate NFT — the product's on-chain half, minted to the account
