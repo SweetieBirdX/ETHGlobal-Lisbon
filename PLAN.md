@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 0 — Project Skeleton (in progress, 0.1–0.3 done)
+**Active phase:** Phase 0 — Project Skeleton (in progress, 0.1–0.4 done)
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -20,7 +20,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 0.1 Repo and base files
 - [x] 0.2 package.json and TypeScript setup
 - [x] 0.3 Install dependencies
-- [ ] 0.4 Folder structure
+- [x] 0.4 Folder structure
 - [ ] 0.5 .env.example
 - [ ] Manual: two testnet accounts opened, `.env` filled in
 
@@ -104,6 +104,13 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (4)
+**Completed:** Phase 0.4
+**Files changed:** added empty `.gitkeep` in `src/hedera/`, `src/x402/`, `src/a2a/`, `src/erc8004/`, `src/data/`, `src/policy/`, `src/web/`, `scripts/`, `docs/`
+**Verification:** All 9 directories exist, all 9 `.gitkeep` files are 0 bytes, all 9 staged by git (git does not track empty directories, so the `.gitkeep` files are what make the structure survive a clone).
+**What the next person should do:** Phase 0.5 — `.env.example`.
+**Known issues / things to watch for:** `npx tsc --noEmit` (and `npm run build`) currently fails with **TS18003 "No inputs were found"** — expected, because `tsconfig.json` includes `src/**/*.ts` + `scripts/**/*.ts` and no `.ts` file exists yet. This fixes itself in Phase 1.1 when the first real source file lands; do not "fix" tsconfig for it.
 
 ### 2026-07-25 — Emre — Claude Code session (3)
 **Completed:** Phase 0.3
