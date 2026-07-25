@@ -10,7 +10,7 @@ import {
   VALIDATION_TAG,
   validatorAddress,
 } from "../src/erc8004/validation.js";
-import { fetchTopicMessages, countTopicEvents } from "../src/hedera/mirror.js";
+import { countTopicEventsSince, fetchTopicMessages, topicSequence } from "../src/hedera/mirror.js";
 
 /**
  * Compliance attestations are real records, not a local list check.
@@ -43,15 +43,11 @@ function record(label: string, passed: boolean, detail = ""): void {
 /** The mirror node lags consensus by a few seconds. */
 const MIRROR_LAG_MS = 8_000;
 
-interface Counts {
-  requests: number;
-  responses: number;
-}
-
-async function counts(): Promise<Counts> {
+/** Request/response pairs written after a topic-sequence baseline. */
+async function pairsSince(seq: number): Promise<{ requests: number; responses: number }> {
   return {
-    requests: await countTopicEvents(REQUEST_EVENT),
-    responses: await countTopicEvents(RESPONSE_EVENT),
+    requests: await countTopicEventsSince(REQUEST_EVENT, seq),
+    responses: await countTopicEventsSince(RESPONSE_EVENT, seq),
   };
 }
 
@@ -70,7 +66,7 @@ async function approvedAgentIsAttested(): Promise<void> {
   console.log("\n=== The demo buyer is attested, and the record is public ===\n");
 
   const buyerAgentId = getBuyerAgentId();
-  const before = await counts();
+  const seqBefore = await topicSequence();
 
   const identity = await verifyBuyerIdentity(buyerAgentId);
 
@@ -101,11 +97,11 @@ async function approvedAgentIsAttested(): Promise<void> {
   console.log(`\n  waiting ${MIRROR_LAG_MS / 1000}s for the mirror node...\n`);
   await new Promise((resolve) => setTimeout(resolve, MIRROR_LAG_MS));
 
-  const after = await counts();
+  const delta = await pairsSince(seqBefore);
   record(
     "exactly one request and one response were written",
-    after.requests === before.requests + 1 && after.responses === before.responses + 1,
-    `requests +${after.requests - before.requests}, responses +${after.responses - before.responses}`,
+    delta.requests === 1 && delta.responses === 1,
+    `requests +${delta.requests}, responses +${delta.responses}`,
   );
 
   // The decisive check: read the record back the way anyone else would.
@@ -147,7 +143,7 @@ async function unapprovedAgentGetsZero(): Promise<void> {
 
   // The seller's own id: registered and active, but not on the vetted list.
   const sellerAgentId = getSellerAgentId();
-  const before = await counts();
+  const seqBefore = await topicSequence();
 
   const identity = await verifyBuyerIdentity(sellerAgentId);
 
@@ -169,11 +165,11 @@ async function unapprovedAgentGetsZero(): Promise<void> {
   console.log(`\n  waiting ${MIRROR_LAG_MS / 1000}s for the mirror node...\n`);
   await new Promise((resolve) => setTimeout(resolve, MIRROR_LAG_MS));
 
-  const after = await counts();
+  const delta = await pairsSince(seqBefore);
   record(
     "the failing case is recorded too, both halves",
-    after.requests === before.requests + 1 && after.responses === before.responses + 1,
-    `requests +${after.requests - before.requests}, responses +${after.responses - before.responses}`,
+    delta.requests === 1 && delta.responses === 1,
+    `requests +${delta.requests}, responses +${delta.responses}`,
   );
 
   const { response } = await findAttestation(identity.attestation!.requestHash);
@@ -188,7 +184,7 @@ async function unapprovedAgentGetsZero(): Promise<void> {
 async function unregisteredAgentWritesNothing(): Promise<void> {
   console.log("\n=== An unregistered agent is refused without writing ===\n");
 
-  const before = await counts();
+  const seqBefore = await topicSequence();
   const identity = await verifyBuyerIdentity("999999999");
 
   record(
@@ -199,10 +195,10 @@ async function unregisteredAgentWritesNothing(): Promise<void> {
   record("no attestation was produced for it", identity.attestation === undefined);
 
   await new Promise((resolve) => setTimeout(resolve, MIRROR_LAG_MS));
-  const after = await counts();
+  const delta = await pairsSince(seqBefore);
   record(
     "nothing was written to the topic",
-    after.requests === before.requests && after.responses === before.responses,
+    delta.requests === 0 && delta.responses === 0,
     "the attestation sits behind the existence check, so garbage ids stay free",
   );
 }

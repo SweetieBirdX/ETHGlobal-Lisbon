@@ -93,7 +93,7 @@ So the compliance attestation is recorded on **Hedera Consensus Service** instea
 An offer is only accepted if it passes all three, in order. Each can only narrow the outcome.
 
 1. **Identity** — `getAgentWallet(agentId)` on the IdentityRegistry, then the registration file is decoded and checked for `active: true`, then a compliance attestation is written to Hedera and the verdict decides. Being registered is not the same as being approved: the seller's own agent 103 is registered, active — and refused with a score-0 attestation anyone can read back.
-2. **Policy** — category must be permitted and the price must meet the owner's minimum. An offer of 1000 HBAR for a category the owner excluded is still refused; money does not override the policy.
+2. **Policy** — three checks, each refusing with its own reason: the category must be permitted, every requested **data type** must be in the owner's `allowedDataTypes`, and the price must meet the minimum. Data types come in two buckets — *performance* (scores, session counts, distance, …) and *health* (`cycleTracking`, `medicationCount`) — and a buyer asking for health data against a policy that forbids it is told exactly that: *"that is health data, and the owner's policy does not permit selling any health data. This is not a matter of price."* An offer of 1000 HBAR changes neither answer; money does not override the policy. An offer naming no types is asking for the standard aggregate, which exposes `performanceScore` + `sessionCount` — so a policy narrower than that pair correctly refuses default offers too.
 3. **Cohort size** — a cohort below `MIN_COHORT_SIZE` (3) is refused. An "average" over one person is that person's record with a different label.
 
 A refusal costs the buyer nothing — no payment is ever signed. It is not silent, though: any agent that reaches gate 1 gets a compliance attestation written to Hedera whichever way the verdict goes, and a policy refusal is recorded in the owner's own ledger. What a refusal never produces is a charge, a sale record, or a reputation rating.
@@ -215,6 +215,7 @@ What is genuinely wired up, what stands in for something, and the command that p
 | Compliance attestation | real record, **stand-in substrate**: HCS, not the ValidationRegistry | `src/erc8004/validation.ts` | `npm run test:validation` |
 | Independent third-party validator | **stand-in**: the seller self-attests | — | stated plainly above; out of scope |
 | Natural-language policy, set once | real | `src/policy/parser.ts` | panel policy form |
+| Data-type taxonomy (performance / health) enforced at the gate | real | `evaluateOffer` in `src/a2a/seller-executor.ts` | `npm run test:e2e` scenario 3 — a health request is refused by name |
 | Raw data never leaves the owner's store | real | `src/data/` (AES-256-GCM, min cohort 3) | `npm run test:e2e` asserts no raw fields in the payload |
 | Repeatability under load | verified twice over | — | `npm run verify:phase7` (24/24) |
 
@@ -226,6 +227,7 @@ Two rows are deliberately not green, and both are named rather than buried: ther
 - The compliance attestation is a **real, publicly readable record on Hedera**, but the validator is the seller itself and the decision rule behind it is still the owner's vetted-id list. It is not independent verification, and it is not the ValidationRegistry — which has no deployment on any chain. That remains the one mocked trust component.
 - `trend` compares a cohort against the whole population — there is no time series in the data, so it is not change over time.
 - The seeded population is synthetic and generated from a fixed seed, so the demo numbers are reproducible.
+- The store includes two **clearly synthetic** health-bucket fields (a cycle-tracking flag and a medication count — never conditions or drug names). They exist so the policy gate can refuse a health request against data that actually exists. Health data is sellable **only** under a policy that permits it explicitly, always as a cohort aggregate (a rate and a mean); the demo owner's policy forbids the entire bucket, and the parser maps "never sell health data" to exactly that.
 - The endpoint price is fixed at 0.5 ℏ while the policy minimum is a floor — an accepted offer below the endpoint price would be quoted the endpoint's price, and the buyer's own guard refuses to overpay.
 - The receipt NFT goes to whichever account settled the payment, but a recipient must have **associated** with the collection first — `create-receipt-token.ts` associates the demo buyer; any additional buyer would need its own association before it could receive receipts. Sales from before the collection existed show `—` in the panel's Receipt column.
 

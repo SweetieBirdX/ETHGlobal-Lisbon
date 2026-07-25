@@ -13,7 +13,7 @@ import { createSellerWallet } from "../src/erc8004/wallets.js";
 import { parsePolicy } from "../src/policy/parser.js";
 import { setPolicy } from "../src/a2a/seller-executor.js";
 import { startX402Server } from "../src/x402/server.js";
-import { countTopicEvents } from "../src/hedera/mirror.js";
+import { countTopicEventsSince, topicSequence } from "../src/hedera/mirror.js";
 
 /**
  * The whole system, end to end, in one run.
@@ -50,13 +50,12 @@ const record = (label: string, passed: boolean) => {
 const sellerWallet = createSellerWallet();
 const buyerAgentId = getBuyerAgentId();
 /**
- * Sale records on the topic.
- *
- * Counted by event rather than by sequence number: the topic also carries the
- * compliance attestations written during gate 1, so "the topic grew" no longer
- * means "a sale was recorded".
+ * Sale records written after a sequence baseline. Counted by event AND from a
+ * baseline: the topic also carries compliance attestations, and a windowed
+ * count slides backwards once the topic outgrows the window.
  */
-const saleEntries = (): Promise<number> => countTopicEvents(SALE_EVENT);
+const newSaleEntries = (afterSequence: number): Promise<number> =>
+  countTopicEventsSince(SALE_EVENT, afterSequence);
 
 async function feedbackCount(): Promise<number> {
   const summary = await reputationRegistry.getSummary!(
@@ -96,9 +95,9 @@ function countCompleted(): number {
 async function scenarioAccepted(): Promise<void> {
   console.log("\n=== Scenario 1: an offer the owner's policy permits ===\n");
 
-  const beforeSales = await saleEntries();
+  const seqBefore = await topicSequence();
   const beforeFeedback = await feedbackCount();
-  console.log(`  baseline: sale entries ${beforeSales}, feedback count ${beforeFeedback}\n`);
+  console.log(`  baseline: topic seq ${seqBefore}, feedback count ${beforeFeedback}\n`);
 
   const result: PurchaseResult = await negotiateAndPurchase(
     { category: "running performance" },
@@ -125,12 +124,12 @@ async function scenarioAccepted(): Promise<void> {
   console.log(`\n  waiting ${CHAIN_SETTLE_WAIT_MS / 1000}s for the post-payment chain...`);
   await new Promise((resolve) => setTimeout(resolve, CHAIN_SETTLE_WAIT_MS));
 
-  const afterSales = await saleEntries();
+  const newSales = await newSaleEntries(seqBefore);
   const afterFeedback = await feedbackCount();
   const query = latestQuery();
 
-  console.log(`  after: sale entries ${afterSales}, feedback count ${afterFeedback}\n`);
-  record("HCS audit entry written", afterSales === beforeSales + 1);
+  console.log(`  after: new sale entries ${newSales}, feedback count ${afterFeedback}\n`);
+  record("exactly one HCS sale entry written", newSales === 1);
   record("ERC-8004 feedback submitted", afterFeedback === beforeFeedback + 1);
   record("query marked completed", query?.status === "completed");
   record(
@@ -143,7 +142,7 @@ async function scenarioAccepted(): Promise<void> {
 async function scenarioRejected(): Promise<void> {
   console.log("\n=== Scenario 2: an offer the policy forbids, at double the price ===\n");
 
-  const beforeSales = await saleEntries();
+  const seqBefore = await topicSequence();
   const beforeFeedback = await feedbackCount();
   const beforeCompleted = countCompleted();
 
@@ -163,12 +162,56 @@ async function scenarioRejected(): Promise<void> {
   // which is recorded for any agent that gets that far — including one that is
   // then refused. What must be absent is a *sale*.
   await new Promise((resolve) => setTimeout(resolve, 3_000));
-  record("no new HCS sale entry", (await saleEntries()) === beforeSales);
+  record("no new HCS sale entry", (await newSaleEntries(seqBefore)) === 0);
   record("no new reputation feedback", (await feedbackCount()) === beforeFeedback);
   record("no new completed sale", countCompleted() === beforeCompleted);
   record(
     "the refusal is recorded as declined, for the owner only",
     latestQuery()?.status === "declined",
+  );
+}
+
+/**
+ * The health refusal — the reason the health fields exist at all.
+ *
+ * Permitted category, fair price, but the buyer also wants cycle-tracking
+ * data. The owner's policy forbids the entire health bucket, so the policy
+ * gate must refuse — and say why in words fit to show on camera.
+ */
+async function scenarioHealthDataRefused(): Promise<void> {
+  console.log("\n=== Scenario 3: permitted category, fair price — but health data ===\n");
+
+  const seqBefore = await topicSequence();
+  const beforeCompleted = countCompleted();
+
+  const result = await negotiateAndPurchase(
+    { category: "running", dataTypes: ["cycleTracking"] },
+    0.5,
+    { onStep: (message) => console.log(`  ${message}`) },
+  );
+
+  console.log(`\n  reply: ${result.negotiation.reply.slice(0, 160)}\n`);
+  record("seller declined the health request", result.negotiation.decision === "decline");
+  record(
+    "declined specifically for the data type",
+    result.negotiation.reason === "data_type_not_permitted",
+  );
+  record(
+    "the refusal names health data, legibly",
+    /health data/i.test(result.negotiation.reply) &&
+      /cycle/i.test(result.negotiation.reply),
+  );
+  record("no payment was attempted", result.purchase === undefined);
+  record("no payment instruction issued", result.negotiation.payment === undefined);
+
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
+  record("no new HCS sale entry", (await newSaleEntries(seqBefore)) === 0);
+  record("no new completed sale", countCompleted() === beforeCompleted);
+  const declineRow = latestQuery();
+  record(
+    "the refusal is in the owner's ledger with its reason",
+    declineRow?.status === "declined" &&
+      declineRow.criteria.includes("data_type_not_permitted"),
   );
 }
 
@@ -190,6 +233,7 @@ async function main(): Promise<void> {
 
     await scenarioAccepted();
     await scenarioRejected();
+    await scenarioHealthDataRefused();
   } finally {
     for (const server of servers) server.close();
   }

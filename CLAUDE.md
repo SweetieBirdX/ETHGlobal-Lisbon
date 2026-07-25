@@ -101,7 +101,7 @@ Full list in `.env.example`. The critical ones: `SELLER_ACCOUNT_ID` / `SELLER_PR
 4. If you get stuck on a step, don't just stop — commit a simplified (mock/fixed-value) version anyway, and note in `PLAN.md` "simplified, needs improvement."
 5. When you finish your work (end of session or end of phase), **you must update `PLAN.md`**: check off the completed phase/prompt, add a handoff note (which files changed, what the next person/session should do, known issues).
 6. Never share real private keys or `.env` contents in code blocks or commit messages.
-7. Sensitive health data categories (medication, menstrual cycle tracking) are out of scope for the demo — work only with fitness/performance data (see `ethglobal-lisbon-proje-fikri.md`).
+7. Sensitive health data is handled deliberately, not avoided. **(Amended in session 44 — the original rule excluded it entirely.)** The store carries two clearly-synthetic health-bucket fields (`cycleTracking` flag, `medicationCount` 0-2) that exist *specifically so the policy gate can refuse a health request demonstrably* — a refusal against data that doesn't exist proves nothing. Rules that still hold: the demo owner's policy never permits health data; the fields stay coarse flags/counts, never conditions, drug names, or anything readable as real PII; and health data is only ever sellable as a cohort aggregate under a policy that names it explicitly.
 
 ---
 

@@ -197,6 +197,12 @@ export function createApiRouter(): Router {
   api.get("/negotiate", async (req, res) => {
     const category = String(req.query["category"] ?? "running");
     const price = Number(req.query["price"] ?? 0.5);
+    // Optional specific data types (e.g. the health-bucket "cycleTracking"),
+    // so the panel can demonstrate the policy gate refusing a health request.
+    const dataTypes =
+      typeof req.query["dataTypes"] === "string" && req.query["dataTypes"].trim()
+        ? req.query["dataTypes"].split(",").map((value) => value.trim())
+        : undefined;
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -220,10 +226,12 @@ export function createApiRouter(): Router {
     try {
       send("step", {
         who: "buyer →",
-        text: `offers ${price} ℏ for ${category} cohort data`,
+        text:
+          `offers ${price} ℏ for ${category} cohort data` +
+          (dataTypes?.length ? ` (requesting: ${dataTypes.join(", ")})` : ""),
       });
 
-      const result = await negotiateAndPurchase({ category }, price, {
+      const result = await negotiateAndPurchase({ category, dataTypes }, price, {
         onStep: (message) => {
           if (!open) return;
           const kind = message.includes("HTTP 402")

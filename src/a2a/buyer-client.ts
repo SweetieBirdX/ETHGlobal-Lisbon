@@ -25,6 +25,11 @@ export interface DataCriteria {
   ageRange?: string;
   /** How many participants the buyer wants in the aggregate. */
   cohortSize?: number;
+  /**
+   * Specific data types requested, e.g. ["performanceScore"] or the
+   * health-bucket ["cycleTracking"]. Omitted = the standard aggregate.
+   */
+  dataTypes?: string[];
 }
 
 /** The paid endpoint the seller routes an accepted offer to (Phase 7.1). */
@@ -66,6 +71,9 @@ export function formatOffer(criteria: DataCriteria, offeredPrice: number): strin
     `category: ${criteria.category}`,
     criteria.ageRange ? `age range: ${criteria.ageRange}` : undefined,
     criteria.cohortSize ? `cohort size: ${criteria.cohortSize}` : undefined,
+    criteria.dataTypes?.length
+      ? `data types: ${criteria.dataTypes.join(", ")}`
+      : undefined,
   ].filter(Boolean);
 
   return (

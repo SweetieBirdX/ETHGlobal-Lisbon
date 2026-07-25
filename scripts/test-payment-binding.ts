@@ -12,6 +12,7 @@ import { reputationRegistry } from "../src/erc8004/contracts.js";
 import { FEEDBACK_TAG } from "../src/erc8004/feedback.js";
 import { createSellerWallet } from "../src/erc8004/wallets.js";
 import { startX402Server } from "../src/x402/server.js";
+import { countTopicEventsSince, topicSequence } from "../src/hedera/mirror.js";
 
 /**
  * The paid endpoint only serves what a negotiation authorised, once.
@@ -42,16 +43,9 @@ function record(label: string, passed: boolean, detail = ""): void {
 
 const sellerWallet = createSellerWallet();
 const buyerAgentId = getBuyerAgentId();
-const topicId = process.env.HCS_AUDIT_TOPIC_ID;
-
-async function hcsSequence(): Promise<number> {
-  if (!topicId) throw new Error("HCS_AUDIT_TOPIC_ID is not set");
-  const response = await fetch(
-    `https://testnet.mirrornode.hedera.com/api/v1/topics/${topicId}/messages?order=desc&limit=1`,
-  );
-  const body = (await response.json()) as { messages?: { sequence_number: number }[] };
-  return body.messages?.[0]?.sequence_number ?? 0;
-}
+/** New sale entries after a topic-sequence baseline — see verify-phase7. */
+const newSaleEntries = (afterSequence: number): Promise<number> =>
+  countTopicEventsSince("data_access_completed", afterSequence);
 
 async function feedbackCount(): Promise<number> {
   const summary = await reputationRegistry.getSummary!(
@@ -140,14 +134,15 @@ async function legitimatePurchase(): Promise<{
   queryId: number;
   paymentUrl: string;
   transactionId: string;
-  hcsAfter: number;
+  /** Topic sequence after the sale chain — Part C counts new events from here. */
+  seqAfter: number;
   feedbackAfter: number;
 }> {
   console.log("\n=== Part B: the negotiated purchase completes (0.5 HBAR) ===\n");
 
-  const hcsBefore = await hcsSequence();
+  const seqBefore = await topicSequence();
   const feedbackBefore = await feedbackCount();
-  console.log(`  baseline: HCS seq ${hcsBefore}, feedback count ${feedbackBefore}\n`);
+  console.log(`  baseline: topic seq ${seqBefore}, feedback count ${feedbackBefore}\n`);
 
   const result = await negotiateAndPurchase({ category: "running performance" }, 0.5, {
     onStep: (message) => console.log(`  ${message}`),
@@ -164,15 +159,21 @@ async function legitimatePurchase(): Promise<{
   console.log(`\n  waiting ${CHAIN_SETTLE_WAIT_MS / 1000}s for the post-payment chain...`);
   await new Promise((resolve) => setTimeout(resolve, CHAIN_SETTLE_WAIT_MS));
 
-  const hcsAfter = await hcsSequence();
+  const newSales = await newSaleEntries(seqBefore);
   const feedbackAfter = await feedbackCount();
-  console.log(`  after: HCS seq ${hcsAfter}, feedback count ${feedbackAfter}\n`);
+  console.log(`  after: new sale entries ${newSales}, feedback count ${feedbackAfter}\n`);
 
-  record("one HCS audit entry written", hcsAfter === hcsBefore + 1);
+  record("one HCS sale entry written", newSales === 1);
   record("one ERC-8004 feedback written", feedbackAfter === feedbackBefore + 1);
   record("negotiation marked completed", readQuery(queryId)?.status === "completed");
 
-  return { queryId, paymentUrl, transactionId, hcsAfter, feedbackAfter };
+  return {
+    queryId,
+    paymentUrl,
+    transactionId,
+    seqAfter: await topicSequence(),
+    feedbackAfter,
+  };
 }
 
 /**
@@ -184,7 +185,7 @@ async function replayWritesNothing(sale: {
   queryId: number;
   paymentUrl: string;
   transactionId: string;
-  hcsAfter: number;
+  seqAfter: number;
   feedbackAfter: number;
 }): Promise<void> {
   console.log("\n=== Part C: a settled negotiation cannot be replayed ===\n");
@@ -219,7 +220,10 @@ async function replayWritesNothing(sale: {
   );
 
   await new Promise((resolve) => setTimeout(resolve, 10_000));
-  record("HCS sequence did not move", (await hcsSequence()) === sale.hcsAfter);
+  record(
+    "no new sale entry after the replay",
+    (await newSaleEntries(sale.seqAfter)) === 0,
+  );
   record("reputation feedback count did not move", (await feedbackCount()) === sale.feedbackAfter);
 }
 

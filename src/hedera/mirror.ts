@@ -85,20 +85,50 @@ export async function topicSequence(
 }
 
 /**
- * Counts messages recording a given event.
+ * Counts messages recording a given event with a sequence number > `afterSequence`.
  *
- * Use this rather than a sequence delta when asserting that something specific
- * was written: the topic now carries compliance attestations alongside sale
- * records, so "the topic grew by one" no longer means "one sale was recorded".
- *
- * Reads a window of recent messages rather than the whole topic history, which
- * is enough to measure a delta across a test run.
+ * This is the only sound way to assert "N of these were written during my
+ * run". Counting within a fixed window of recent messages looked equivalent
+ * until the topic outgrew the window: every new message then pushes an old one
+ * out, so the windowed count of an event can go *down* while the topic only
+ * ever appends — which made "+1 sale" assertions fail with deltas like -4.
+ * A sequence baseline cannot slide.
  */
-export async function countTopicEvents(
+export async function countTopicEventsSince(
   event: string,
-  window = 100,
+  afterSequence: number,
   topicId: string = requireAuditTopicId(),
 ): Promise<number> {
-  const messages = await fetchTopicMessages(window, topicId);
-  return messages.filter((message) => message.json?.["event"] === event).length;
+  let count = 0;
+  let url = `${MIRROR_NODE}/api/v1/topics/${topicId}/messages?order=desc&limit=100`;
+
+  // A test run writes ~10 messages, so one page is the norm; the loop is a
+  // guard against a busy topic, not an expectation.
+  for (let page = 0; page < 5; page += 1) {
+    const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) {
+      throw new Error(`Mirror node responded ${response.status} for topic ${topicId}.`);
+    }
+    const body = (await response.json()) as {
+      messages?: MirrorTopicMessage[];
+      links?: { next?: string | null };
+    };
+    const messages = body.messages ?? [];
+
+    for (const message of messages) {
+      if (message.sequence_number <= afterSequence) return count;
+      const text = Buffer.from(message.message, "base64").toString("utf8");
+      try {
+        const parsed = JSON.parse(text) as Record<string, unknown>;
+        if (parsed["event"] === event) count += 1;
+      } catch {
+        /* the Agent Kit hook writes prose — never an event */
+      }
+    }
+
+    if (!body.links?.next || messages.length === 0) return count;
+    url = `${MIRROR_NODE}${body.links.next}`;
+  }
+
+  return count;
 }

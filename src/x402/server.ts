@@ -121,9 +121,14 @@ export function matchesNegotiatedCriteria(
   negotiated: CohortCriteria,
   requested: CohortCriteria,
 ): boolean {
+  // Both sides pass through parseCriteria, which sorts and deduplicates the
+  // data types — so a straight join comparison is order-independent. Absent
+  // must equal absent here too: requesting health types that were never
+  // negotiated is the same trick as widening the cohort filter.
   return (
     negotiated.activityType === requested.activityType &&
-    negotiated.ageRange === requested.ageRange
+    negotiated.ageRange === requested.ageRange &&
+    (negotiated.dataTypes ?? []).join(",") === (requested.dataTypes ?? []).join(",")
   );
 }
 

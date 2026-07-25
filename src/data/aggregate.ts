@@ -1,3 +1,4 @@
+import { KNOWN_DATA_TYPES } from "../policy/parser.js";
 import { getUserData, openDatabase, type UserRow } from "./db.js";
 
 /**
@@ -22,11 +23,21 @@ export interface CohortInsight {
   avgPerformanceScore: number;
   /** How this cohort compares with the population as a whole. */
   trend: CohortTrend;
+  /**
+   * Health-bucket stats, present ONLY when those data types were requested —
+   * which the policy gate only permits when the owner's policy explicitly
+   * allows them. A boolean becomes a cohort rate, a count becomes a mean;
+   * individual values never leave.
+   */
+  cycleTrackingRate?: number;
+  avgMedicationCount?: number;
 }
 
 export interface CohortCriteria {
   ageRange?: string;
   activityType?: string;
+  /** Data types the buyer negotiated for, sorted — shapes the aggregate. */
+  dataTypes?: string[];
 }
 
 /**
@@ -56,6 +67,9 @@ interface AggregatableRecord {
   activityType: string;
   weeklySessionCount: number;
   performanceScore: number;
+  /** Health bucket — optional so pre-upgrade records still aggregate. */
+  cycleTracking?: boolean;
+  medicationCount?: number;
 }
 
 const mean = (values: number[]): number =>
@@ -101,7 +115,7 @@ export async function getCohortInsight(
     const populationScore = mean(population.map((r) => r.performanceScore));
     const difference = cohortScore - populationScore;
 
-    return {
+    const insight: CohortInsight = {
       participantCount: cohort.length,
       avgSessionCount: roundTo(mean(cohort.map((r) => r.weeklySessionCount)), 1),
       avgPerformanceScore: roundTo(cohortScore, 1),
@@ -109,6 +123,25 @@ export async function getCohortInsight(
       // population — a ±2 point band counts as flat.
       trend: difference > 2 ? "up" : difference < -2 ? "down" : "flat",
     };
+
+    // Health stats only when negotiated for. The gate upstream has already
+    // checked the owner's policy permits them; here they are still reduced to
+    // cohort statistics — a rate and a mean, never a row.
+    const requested = criteria.dataTypes ?? [];
+    if (requested.includes("cycleTracking")) {
+      insight.cycleTrackingRate = roundTo(
+        (cohort.filter((r) => r.cycleTracking === true).length / cohort.length) * 100,
+        1,
+      );
+    }
+    if (requested.includes("medicationCount")) {
+      insight.avgMedicationCount = roundTo(
+        mean(cohort.map((r) => r.medicationCount ?? 0)),
+        1,
+      );
+    }
+
+    return insight;
   } finally {
     db.close();
   }
@@ -118,11 +151,31 @@ export async function getCohortInsight(
  * Reads cohort criteria out of untrusted query parameters, ignoring anything
  * that is not a recognised filter.
  */
+/**
+ * Normalises a data-type list: known values only, deduplicated, sorted.
+ *
+ * Sorting matters beyond tidiness — the x402 gate compares the negotiated list
+ * against the requested one as a whole, so both sides must normalise the same
+ * way or identical lists in different orders would look like a mismatch.
+ */
+export function normalizeDataTypes(values: string[]): string[] {
+  const known = new Set<string>(KNOWN_DATA_TYPES);
+  return [...new Set(values.map((v) => v.trim()).filter((v) => known.has(v)))].sort();
+}
+
 export function parseCriteria(query: Record<string, unknown>): CohortCriteria {
   const criteria: CohortCriteria = {};
   if (typeof query["ageRange"] === "string") criteria.ageRange = query["ageRange"];
   if (typeof query["activityType"] === "string") {
     criteria.activityType = query["activityType"];
+  }
+  const rawTypes = query["dataTypes"];
+  if (typeof rawTypes === "string" && rawTypes.trim()) {
+    const dataTypes = normalizeDataTypes(rawTypes.split(","));
+    if (dataTypes.length > 0) criteria.dataTypes = dataTypes;
+  } else if (Array.isArray(rawTypes)) {
+    const dataTypes = normalizeDataTypes(rawTypes.filter((v) => typeof v === "string"));
+    if (dataTypes.length > 0) criteria.dataTypes = dataTypes;
   }
   return criteria;
 }

@@ -1,5 +1,6 @@
 import {
   DEFAULT_DB_PATH,
+  encryptField,
   getUserData,
   insertUser,
   openDatabase,
@@ -10,10 +11,21 @@ import {
  *
  * A cohort aggregate is only meaningful over several people, so the demo needs
  * a population to aggregate — these stand in for the records a real user's
- * wearable would sync. Fitness and performance only: medication and cycle
- * tracking are deliberately out of scope for this project.
+ * wearable would sync.
+ *
+ * Alongside the performance fields, each record carries two **clearly
+ * synthetic** health-bucket fields (a cycle-tracking flag and a medication
+ * count — flags and small counts, never conditions or drug names). They exist
+ * so the policy gate has something real to refuse: the demo owner's policy
+ * never permits health data, and a buyer asking for it is turned down against
+ * data that actually exists rather than against nothing. See CLAUDE.md rule 7.
  *
  *   npx tsx scripts/seed-data.ts
+ *
+ * Running against an existing pre-health database upgrades the records **in
+ * place** (decrypt → add fields → re-encrypt) instead of reseeding, because
+ * this file also holds the `queries` ledger — sales, declines and receipt
+ * serials that a wipe would erase.
  */
 
 const USER_COUNT = 12;
@@ -53,6 +65,10 @@ export interface FitnessRecord {
   avgSleepHours: number;
   /** 0-100 composite the cohort aggregate reports on. */
   performanceScore: number;
+  /** Health bucket, deliberately coarse: does this user track their cycle? */
+  cycleTracking: boolean;
+  /** Health bucket: how many regular medications, 0-2. A count, never names. */
+  medicationCount: number;
 }
 
 /**
@@ -132,7 +148,59 @@ function generateRecord(
     performanceScore: Number(
       clamp(vo2max * 1.4 + (72 - restingHeartRate) * 0.8, 0, 100).toFixed(1),
     ),
+    ...generateHealthFields(),
   };
+}
+
+/**
+ * The two health-bucket fields, drawn from the same seeded PRNG.
+ *
+ * Deliberately uninformative shapes — a flag and a small count — because their
+ * job is to be *refused* by the policy gate on camera, not to model anyone's
+ * health. Also used by the in-place upgrade for records seeded before these
+ * fields existed.
+ */
+function generateHealthFields(): Pick<FitnessRecord, "cycleTracking" | "medicationCount"> {
+  return {
+    cycleTracking: random() < 0.5,
+    medicationCount: Math.floor(random() * 3),
+  };
+}
+
+/** Adds the health fields to records seeded before they existed. */
+function upgradeExistingUsers(): void {
+  const db = openDatabase();
+  try {
+    const rows = db.prepare("SELECT id FROM users ORDER BY id").all() as { id: number }[];
+    let upgraded = 0;
+
+    for (const { id } of rows) {
+      const record = getUserData<Partial<FitnessRecord>>(db, id);
+      if (!record || record.cycleTracking !== undefined) continue;
+
+      const full = { ...record, ...generateHealthFields() };
+      db.prepare("UPDATE users SET encrypted_fitness_data = ? WHERE id = ?").run(
+        encryptField(JSON.stringify(full)),
+        id,
+      );
+      upgraded += 1;
+    }
+
+    if (upgraded > 0) {
+      console.log(
+        `Upgraded ${upgraded} existing records in place with the health fields ` +
+          `(cycleTracking, medicationCount) — the queries ledger is untouched.`,
+      );
+      const sample = getUserData<FitnessRecord>(db, rows[0]!.id);
+      console.log(
+        `sample (id ${rows[0]!.id}): cycleTracking=${sample?.cycleTracking} medicationCount=${sample?.medicationCount}`,
+      );
+    } else {
+      console.log("All records already carry the health fields — nothing to upgrade.");
+    }
+  } finally {
+    db.close();
+  }
 }
 
 function main(): void {
@@ -141,10 +209,13 @@ function main(): void {
   const existing = db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number };
   if (existing.n > 0 && process.env.FORCE !== "1") {
     console.log(
-      `${DEFAULT_DB_PATH} already holds ${existing.n} users — nothing to do.\n` +
-        `Set FORCE=1 to append another ${USER_COUNT} records.`,
+      `${DEFAULT_DB_PATH} already holds ${existing.n} users — not reseeding.\n` +
+        `Set FORCE=1 to append another ${USER_COUNT} records.\n`,
     );
     db.close();
+    // Older databases predate the health fields; bring them up to date without
+    // touching the ledger that lives in the same file.
+    upgradeExistingUsers();
     return;
   }
 

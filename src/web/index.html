@@ -304,6 +304,12 @@
             <button id="run">Send offer</button>
           </div>
         </div>
+        <!-- The health request the policy gate exists to refuse: tick, send,
+             and watch the seller decline with the reason in the log. -->
+        <label style="display: flex; gap: 6px; align-items: center; font-weight: normal">
+          <input id="request-health" type="checkbox" />
+          also request cycle-tracking data (health bucket)
+        </label>
         <p class="status" id="run-status"></p>
         <div class="log" id="log">
           <p class="empty">Nothing yet — send an offer to watch the two agents negotiate.</p>
@@ -528,8 +534,9 @@
         $("run-status").className = "status";
         $("run-status").textContent = "Negotiating…";
 
+        const health = $("request-health").checked ? "&dataTypes=cycleTracking" : "";
         stream = new EventSource(
-          `/api/negotiate?category=${encodeURIComponent(category)}&price=${encodeURIComponent(price)}`,
+          `/api/negotiate?category=${encodeURIComponent(category)}&price=${encodeURIComponent(price)}${health}`,
         );
 
         stream.onmessage = (event) => {

@@ -11,7 +11,7 @@ import { verifyBuyerIdentity } from "../src/a2a/seller-executor.js";
 import { parsePolicy } from "../src/policy/parser.js";
 import { COHORT_INSIGHT_PATH, X402_BASE_URL } from "../src/x402/config.js";
 import { startX402Server } from "../src/x402/server.js";
-import { countTopicEvents } from "../src/hedera/mirror.js";
+import { countTopicEventsSince, topicSequence } from "../src/hedera/mirror.js";
 import {
   assertSufficientBalance,
   EndpointUnreachableError,
@@ -72,14 +72,16 @@ const buyerAgentId = getBuyerAgentId();
 /* ------------------------------------------------------------------ counters */
 
 /**
- * Sale records on the audit topic.
+ * Sale records written after a topic-sequence baseline.
  *
- * Counted by event, not by sequence number: gate 1 now writes a compliance
- * attestation pair per negotiation to the same topic, so a raw sequence delta
- * would count attestations as sales and the "+1 per run" assertion below would
- * be measuring the wrong thing.
+ * Two failed designs are baked into this signature. A raw sequence delta
+ * counts the gate-1 attestations as sales; a windowed event count slides
+ * backwards once the topic outgrows the window (observed as "sale entries
+ * 16 -> 12"). Counting a specific event from a sequence baseline has neither
+ * failure mode.
  */
-const saleEntries = (): Promise<number> => countTopicEvents(SALE_EVENT);
+const newSaleEntries = (afterSequence: number): Promise<number> =>
+  countTopicEventsSince(SALE_EVENT, afterSequence);
 
 async function feedbackCount(): Promise<number> {
   const summary = await reputationRegistry.getSummary!(
@@ -117,14 +119,15 @@ function latestCompleted(): QueryRow | undefined {
 
 interface Snapshot {
   completed: number;
-  sales: number;
+  /** Topic sequence at snapshot time — new sale entries are counted from here. */
+  seq: number;
   feedback: number;
 }
 
 async function snapshot(): Promise<Snapshot> {
   return {
     completed: countCompleted(),
-    sales: await saleEntries(),
+    seq: await topicSequence(),
     feedback: await feedbackCount(),
   };
 }
@@ -196,7 +199,7 @@ async function repeatedRuns(): Promise<void> {
 
   let before = await snapshot();
   console.log(
-    `  baseline: completed=${before.completed} saleEntries=${before.sales} feedback=${before.feedback}`,
+    `  baseline: completed=${before.completed} topicSeq=${before.seq} feedback=${before.feedback}`,
   );
 
   for (const run of [1, 2]) {
@@ -206,7 +209,7 @@ async function repeatedRuns(): Promise<void> {
     record(group, `${E2E_SCRIPT} exited cleanly (run ${run})`, code === 0, summary);
 
     const completed = await waitForIncrease(countCompleted, before.completed);
-    const sales = await waitForIncrease(saleEntries, before.sales);
+    const sales = await waitForIncrease(() => newSaleEntries(before.seq), 0);
     const feedback = await waitForIncrease(feedbackCount, before.feedback);
 
     record(
@@ -218,8 +221,8 @@ async function repeatedRuns(): Promise<void> {
     record(
       group,
       `a new sale entry landed on the HCS topic (run ${run})`,
-      sales > before.sales,
-      `sale entries ${before.sales} → ${sales}`,
+      sales > 0,
+      `new sale entries since seq ${before.seq}: ${sales}`,
     );
     record(
       group,
@@ -233,9 +236,9 @@ async function repeatedRuns(): Promise<void> {
       group,
       `exactly one sale, one audit entry and one rating (run ${run})`,
       completed === before.completed + 1 &&
-        sales === before.sales + 1 &&
+        sales === 1 &&
         feedback === before.feedback + 1,
-      `deltas: completed +${completed - before.completed}, sales +${sales - before.sales}, feedback +${feedback - before.feedback}`,
+      `deltas: completed +${completed - before.completed}, new sales ${sales}, feedback +${feedback - before.feedback}`,
     );
 
     const row = latestCompleted();
@@ -246,7 +249,7 @@ async function repeatedRuns(): Promise<void> {
       `query #${row?.id} buyer ${row?.buyer_agent_id} tx ${row?.tx_hash}`,
     );
 
-    before = { completed, sales, feedback };
+    before = { completed, seq: await topicSequence(), feedback };
   }
 }
 

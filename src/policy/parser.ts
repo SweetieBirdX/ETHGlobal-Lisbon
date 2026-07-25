@@ -21,8 +21,10 @@ export const KNOWN_CATEGORIES = [
   "strength",
 ] as const;
 
-/** Metrics a buyer can ask to have aggregated. */
-export const KNOWN_DATA_TYPES = [
+/**
+ * Fitness/performance metrics — the bucket the demo owner actually sells from.
+ */
+export const PERFORMANCE_DATA_TYPES = [
   "performanceScore",
   "sessionCount",
   "activeMinutes",
@@ -31,6 +33,32 @@ export const KNOWN_DATA_TYPES = [
   "vo2max",
   "sleep",
 ] as const;
+
+/**
+ * Health-category data types. These exist in the store as clearly-synthetic
+ * flag/count fields *so the policy gate has something real to refuse* — the
+ * demo owner's policy never permits them. An owner CAN permit them explicitly;
+ * that is their data and their call, which is the project's whole premise.
+ * (This reverses the session-26 hard-drop; see CLAUDE.md rule 7.)
+ */
+export const HEALTH_DATA_TYPES = ["cycleTracking", "medicationCount"] as const;
+
+/** Every metric a buyer can ask to have aggregated, across both buckets. */
+export const KNOWN_DATA_TYPES = [
+  ...PERFORMANCE_DATA_TYPES,
+  ...HEALTH_DATA_TYPES,
+] as const;
+
+export type DataTypeBucket = "performance" | "health";
+
+/** Which bucket a data type belongs to — used for legible refusals. */
+export function bucketOf(dataType: string): DataTypeBucket | undefined {
+  if ((PERFORMANCE_DATA_TYPES as readonly string[]).includes(dataType)) {
+    return "performance";
+  }
+  if ((HEALTH_DATA_TYPES as readonly string[]).includes(dataType)) return "health";
+  return undefined;
+}
 
 export const policySchema = z.object({
   allowedCategories: z
@@ -53,7 +81,12 @@ export type DataPolicy = z.infer<typeof policySchema>;
 
 const SYSTEM_PROMPT =
   "You convert a person's instructions about selling their own fitness data into a strict policy object. " +
-  `Valid categories: ${KNOWN_CATEGORIES.join(", ")}. Valid data types: ${KNOWN_DATA_TYPES.join(", ")}. ` +
+  `Valid categories: ${KNOWN_CATEGORIES.join(", ")}. ` +
+  `Data types come in two buckets. Performance: ${PERFORMANCE_DATA_TYPES.join(", ")}. ` +
+  `Health: ${HEALTH_DATA_TYPES.join(", ")}. ` +
+  "Phrases like 'never sell health data', 'no medical information' or 'no health data' exclude the ENTIRE health bucket. " +
+  "Health data types may only appear when the person explicitly and specifically permits them " +
+  "(e.g. 'you may sell my cycle tracking stats' permits cycleTracking). " +
   "Include only what the person actually permits. If they exclude something, leave it out rather than listing it. " +
   "If they give no price, use 0. Never invent categories or data types outside the valid lists.";
 

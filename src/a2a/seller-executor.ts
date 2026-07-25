@@ -11,6 +11,7 @@ import {
   CohortTooSmallError,
   getCohortInsight,
   MIN_COHORT_SIZE,
+  normalizeDataTypes,
 } from "../data/aggregate.js";
 import {
   insertQuery,
@@ -30,7 +31,7 @@ import {
 import { logAuditEvent } from "../hedera/audit.js";
 import { createSellerClient } from "../hedera/clients.js";
 import { mintReceipt, receiptTokenId } from "../hedera/receipt.js";
-import { parsePolicy, type DataPolicy } from "../policy/parser.js";
+import { bucketOf, parsePolicy, type DataPolicy } from "../policy/parser.js";
 import {
   COHORT_INSIGHT_PATH,
   COHORT_INSIGHT_PRICE_HBAR,
@@ -56,6 +57,8 @@ export type DeclineReason =
   | "identity_unverified"
   | "offer_incomplete"
   | "category_mismatch"
+  /** The buyer asked for a data type the owner's policy does not permit. */
+  | "data_type_not_permitted"
   | "price_too_low"
   | "cohort_too_small"
   /** Something failed on the seller's side; the buyer is not at fault. */
@@ -85,6 +88,8 @@ export interface NegotiationResult {
   reason?: DeclineReason;
   /** Size of the cohort the buyer would receive, when the offer is accepted. */
   cohortSize?: number;
+  /** Data types the acceptance covers — bound into the payment URL. */
+  dataTypes?: string[];
   /** Present only on an acceptance. */
   payment?: PaymentInstruction;
 }
@@ -94,7 +99,16 @@ export interface Offer {
   category?: string;
   priceHbar?: number;
   ageRange?: string;
+  /** Data types requested; empty/omitted means the standard aggregate. */
+  dataTypes?: string[];
 }
+
+/**
+ * What the standard aggregate exposes, and therefore what an offer that names
+ * no data types is implicitly asking for. A policy that permits less than this
+ * pair correctly refuses default offers — the aggregate would reveal both.
+ */
+export const DEFAULT_OFFER_DATA_TYPES = ["performanceScore", "sessionCount"];
 
 /**
  * The owner's policy, as typed in plain language.
@@ -169,9 +183,14 @@ export function buildPaymentInstruction(
   activityType: string,
   ageRange?: string,
   queryId?: number,
+  dataTypes?: string[],
 ): PaymentInstruction {
   const params = new URLSearchParams({ activityType });
   if (ageRange) params.set("ageRange", ageRange);
+  // The data types are part of what was negotiated, so they are bound into the
+  // URL the same way the cohort criteria are — the x402 gate compares them
+  // against the stored acceptance, and a buyer cannot widen them afterwards.
+  if (dataTypes?.length) params.set("dataTypes", dataTypes.join(","));
   // Carries the negotiation into the payment, so the seller can tie a settled
   // transaction back to the buyer and terms that were agreed.
   if (queryId !== undefined) params.set("queryId", String(queryId));
@@ -335,12 +354,27 @@ export function extractOffer(message: Message): Offer {
   const price = metadata["offeredPriceHbar"];
   const category = metadata["category"];
   const ageRange = metadata["ageRange"];
+  const rawTypes = metadata["dataTypes"];
+
+  const dataTypes = Array.isArray(rawTypes)
+    ? rawTypes.filter((value): value is string => typeof value === "string")
+    : undefined;
 
   return {
     category: typeof category === "string" ? category : undefined,
     priceHbar: typeof price === "number" ? price : Number(price) || undefined,
     ageRange: typeof ageRange === "string" ? ageRange : undefined,
+    ...(dataTypes?.length ? { dataTypes } : {}),
   };
+}
+
+/** Human wording for a data type, for refusals meant to be read aloud. */
+function describeDataType(dataType: string): string {
+  const labels: Record<string, string> = {
+    cycleTracking: "menstrual-cycle tracking data",
+    medicationCount: "medication data",
+  };
+  return labels[dataType] ?? dataType;
 }
 
 /**
@@ -385,6 +419,29 @@ export function evaluateOffer(offer: Offer, policy: DataPolicy): NegotiationResu
     };
   }
 
+  // Data types. An offer that names none is asking for the standard aggregate,
+  // which exposes DEFAULT_OFFER_DATA_TYPES — so that is what gets checked.
+  const requestedTypes = normalizeDataTypes(
+    offer.dataTypes?.length ? offer.dataTypes : DEFAULT_OFFER_DATA_TYPES,
+  );
+  const refusedTypes = requestedTypes.filter(
+    (dataType) => !policy.allowedDataTypes.includes(dataType),
+  );
+  if (refusedTypes.length > 0) {
+    const health = refusedTypes.filter((dataType) => bucketOf(dataType) === "health");
+    return {
+      decision: "decline",
+      reason: "data_type_not_permitted",
+      reply:
+        (health.length > 0
+          ? `You asked for ${health.map(describeDataType).join(" and ")} — that is health data, ` +
+            "and the owner's policy does not permit selling any health data. "
+          : `You asked for ${refusedTypes.join(", ")}, which the owner's policy does not permit. `) +
+        `Permitted data types: ${policy.allowedDataTypes.join(", ") || "none at present"}. ` +
+        "This is not a matter of price.",
+    };
+  }
+
   if (offer.priceHbar < policy.minPrice) {
     return {
       decision: "decline",
@@ -397,8 +454,9 @@ export function evaluateOffer(offer: Offer, policy: DataPolicy): NegotiationResu
 
   return {
     decision: "accept",
+    dataTypes: requestedTypes,
     reply:
-      `Offer accepted for ${matched} data at ${offer.priceHbar} HBAR. ` +
+      `Offer accepted for ${matched} data (${requestedTypes.join(", ")}) at ${offer.priceHbar} HBAR. ` +
       "The cohort aggregate is available from the paid endpoint; settle the x402 payment and it will be released. " +
       "Raw records stay in the owner's encrypted store.",
   };
@@ -628,6 +686,9 @@ export class SellerExecutor implements AgentExecutor {
         {
           activityType,
           ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),
+          // Part of the negotiated terms: the x402 gate compares these against
+          // the payment URL, so the buyer receives exactly the types agreed.
+          ...(verdict.dataTypes?.length ? { dataTypes: verdict.dataTypes } : {}),
           // Carried on the row so the receipt NFT can reference the attestation
           // that admitted this buyer. Extra keys here are ignored by
           // parseCriteria, so the x402 criteria gate is unaffected — same
@@ -643,7 +704,12 @@ export class SellerExecutor implements AgentExecutor {
       db.close();
     }
 
-    const payment = buildPaymentInstruction(activityType, offer.ageRange, queryId);
+    const payment = buildPaymentInstruction(
+      activityType,
+      offer.ageRange,
+      queryId,
+      verdict.dataTypes,
+    );
 
     this.publishReply(
       requestContext,
@@ -686,6 +752,7 @@ export class SellerExecutor implements AgentExecutor {
           {
             activityType: offer.category,
             ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),
+            ...(offer.dataTypes?.length ? { dataTypes: offer.dataTypes } : {}),
             ...(reason ? { declineReason: reason } : {}),
           },
           offer.priceHbar,
