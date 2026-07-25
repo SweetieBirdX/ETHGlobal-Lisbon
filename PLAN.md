@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 8 — Frontend (8.1-8.2 done). Next: 8.3 — live negotiation log (SSE).
+**Active phase:** Phase 8 — Frontend (8.1-8.4 done). Next: 8.5 — HCS audit trail view.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -74,8 +74,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 ### Phase 8 — Frontend
 - [x] 8.1 Frontend skeleton
 - [x] 8.2 Policy input form
-- [ ] 8.3 Live negotiation log (SSE)
-- [ ] 8.4 Earnings panel
+- [x] 8.3 Live negotiation log (SSE)
+- [x] 8.4 Earnings panel
 - [ ] 8.5 HCS audit trail view
 
 ### Phase 9 — Documentation and Demo
@@ -104,6 +104,31 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (36)
+**Completed:** Phase 8.4
+**Files changed:** `src/web/api.ts` — `/earnings` now returns **completed sales only** in `sales` (with `hashscanUrl` derived from the Hedera tx id via `toHashScanTransactionId`), plus a separate `declines` list and truthful counts; helpers `describeCriteria` / `safeParse`. `src/web/index.html` — table is now **When · Buyer · Cohort · Price · Payment (HashScan ↗)**, with the total above it and a line summarising what was refused. `src/a2a/seller-executor.ts` — new `recordDecline()` writes a `declined` row for offers that were judged and refused.
+**Why declines are now recorded:** the panel had a "Declined" stat that **could only ever read 0** — refusals never wrote a ledger row. Rather than delete the stat, the executor now records offers it turned down (only ones complete enough to have been judged; malformed messages are not decisions). The number means something now, and "what your agent refused on your behalf" is the more persuasive half of the demo.
+**Verification:** `npx tsc --noEmit` clean, inline script re-parsed. Against the live stack: `/earnings` → `total=2 ℏ completed=4 declined=0` with every sales row carrying a HashScan URL (e.g. `…/transaction/0.0.7162784-1784959831-572034308`) and `sales.every(status === "completed")` true. Ran a refusal → `declined=1`, `declines: [{criteria:"swimming", price:0.9, reason:"category_mismatch"}]`; ran a second → `declined=2` (`strength@3`, `swimming@0.9`).
+**What the next person should do:** Phase 8.5 — the HCS audit trail view. Read the topic through the mirror node (`/api/v1/topics/${HCS_AUDIT_TOPIC_ID}/messages`) and remember the topic holds **two message shapes** — our JSON entries and the Agent Kit hook's plain-text ones (session 11).
+**Known issues / things to watch for:**
+- **The decline message was corrected.** The stream used to end "Nothing was paid and nothing was recorded", which stopped being true once refusals were written to the ledger. It now reads "No payment, no HCS entry, no reputation write — the refusal is logged for the owner only", which distinguishes the owner's private bookkeeping from anything on-chain.
+- `recordDecline` is best-effort and wrapped: a bookkeeping failure must never change the answer the buyer gets.
+- Only **policy** refusals are recorded — an unverified identity or a malformed offer is not. Otherwise any stray message would land in the owner's earnings view.
+- The `price 1000000, status accepted` row from the error-case suite is still in the ledger but **no longer shown**, since the table lists completed sales only.
+- Dates render as `HH:MM` — fine for a demo filmed in one sitting, misleading across days.
+
+### 2026-07-25 — Emre — Claude Code session (35)
+**Completed:** Phase 8.3
+**Files changed:** `src/web/api.ts` — `GET /negotiate?category&price` streams a full `negotiateAndPurchase` run as **server-sent events** (`step` / `decision` / `payment` / `data` / `chain` / `done` / `error`), and `waitForCompletion()` polls the `queries` row so the panel reports the audit + reputation writes only once they have actually landed. `src/web/index.html` — the "Send offer" button opens an `EventSource`, renders each event into the log with accept/decline/payment colouring, links the settled transaction to HashScan, refreshes earnings on completion, and handles a dropped connection.
+**Verification:** `npx tsc --noEmit` clean, inline script re-parsed. Streamed against the live stack. **Accept path** emitted 16 events in order: offer → `negotiation: accept` → `GET … queryId=8` → **402** → quote (`0.5 ℏ / 50000000 tinybar to 0.0.9696085`) → `signed by 0.0.9697053` → retry → **200** → `settlement success=true` → tx `0.0.7162784@1784959831.572034308` → aggregate `{"participantCount":3,…}` → *"writing HCS audit entry and ERC-8004 feedback…"* → **"audit trail and reputation recorded — query #8 marked completed"** → done. **Decline path** (swimming @0.9 ℏ) emitted 4 events ending *"Nothing was paid and nothing was recorded."* Earnings then read `totalEarnedHbar: 2, completedCount: 4`.
+**What the next person should do:** Phase 8.4 — the earnings panel. `GET /api/earnings` already returns totals, counts and the recent rows, and the page renders them; 8.4 is mostly presentation plus refreshing after a run.
+**Known issues / things to watch for:**
+- **The panel does not claim the chain is done until it is.** After the buyer has its data the stream says "writing…", then polls the `queries` row for up to 45 s and reports either "recorded" or "still settling". Claiming completion at HTTP 200 would be a lie by ~15-25 s.
+- Log lines are **HTML-escaped**; only the HashScan link is inserted as markup, deliberately. Server text (including seller replies) must never be trusted as HTML.
+- Each press of "Send offer" on an accepted category **spends a real 0.5 ℏ**. There is no confirmation step — that is the point of the demo, but do not lean on the button while rehearsing.
+- The stream clears the log at the start of each run, so a demo shows one clean negotiation rather than an accumulating scroll.
+- `EventSource` only speaks GET, so the parameters ride in the query string.
 
 ### 2026-07-25 — Emre — Claude Code session (34)
 **Completed:** Phase 8.2

@@ -165,6 +165,7 @@
       a { color: #7dd3fc; }
       .status { font-size: 12px; color: var(--muted); min-height: 18px; }
       .status.error { color: var(--danger); }
+      .declines { font-size: 12px; color: var(--muted); margin: 12px 0 0; line-height: 1.6; }
     </style>
   </head>
   <body>
@@ -207,12 +208,13 @@
           </div>
           <table>
             <thead>
-              <tr><th>Buyer</th><th>Cohort</th><th>Price</th><th>Status</th></tr>
+              <tr><th>When</th><th>Buyer</th><th>Cohort</th><th>Price</th><th>Payment</th></tr>
             </thead>
             <tbody id="sales-body">
-              <tr><td colspan="4" class="empty">No sales yet.</td></tr>
+              <tr><td colspan="5" class="empty">No sales yet.</td></tr>
             </tbody>
           </table>
+          <p class="declines" id="declines"></p>
         </section>
       </div>
 
@@ -253,8 +255,16 @@
         return new Date().toLocaleTimeString([], { hour12: false });
       }
 
-      function addEntry(who, text, kind = "") {
-        state.entries.push({ who, text, kind, at: time() });
+      /** Log lines carry server text, so escape unless the caller built the markup. */
+      function escapeHtml(value) {
+        return String(value ?? "").replace(
+          /[&<>"']/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+        );
+      }
+
+      function addEntry(who, text, kind = "", html = false) {
+        state.entries.push({ who, text, kind, html, at: time() });
         renderLog();
       }
       window.addEntry = addEntry;
@@ -268,7 +278,7 @@
         log.innerHTML = state.entries
           .map(
             (e) =>
-              `<div class="entry ${e.kind}"><time>${e.at}</time><div><span class="who">${e.who}</span> ${e.text}</div></div>`,
+              `<div class="entry ${e.kind}"><time>${e.at}</time><div><span class="who">${escapeHtml(e.who)}</span> ${e.html ? e.text : escapeHtml(e.text)}</div></div>`,
           )
           .join("");
         log.scrollTop = log.scrollHeight;
@@ -289,6 +299,12 @@
         }
       }
 
+      /** "2026-07-25 06:10:04" → "06:10" (the demo happens within one day). */
+      function shortTime(value) {
+        const match = /\d{2}:\d{2}/.exec(String(value ?? ""));
+        return match ? match[0] : String(value ?? "");
+      }
+
       async function loadEarnings() {
         try {
           const res = await fetch("/api/earnings");
@@ -300,16 +316,31 @@
 
           const body = $("sales-body");
           if (!data.sales?.length) {
-            body.innerHTML = '<tr><td colspan="4" class="empty">No sales yet.</td></tr>';
-            return;
+            body.innerHTML = '<tr><td colspan="5" class="empty">No sales yet.</td></tr>';
+          } else {
+            body.innerHTML = data.sales
+              .map(
+                (s) =>
+                  `<tr><td>${escapeHtml(shortTime(s.createdAt))}</td>` +
+                  `<td>#${escapeHtml(s.buyerAgentId)}</td>` +
+                  `<td>${escapeHtml(s.criteria)}</td>` +
+                  `<td>${escapeHtml(s.price)} ℏ</td>` +
+                  `<td>${
+                    s.hashscanUrl
+                      ? `<a href="${encodeURI(s.hashscanUrl)}" target="_blank" rel="noreferrer">HashScan ↗</a>`
+                      : "—"
+                  }</td></tr>`,
+              )
+              .join("");
           }
-          body.innerHTML = data.sales
-            .map(
-              (s) =>
-                `<tr><td>#${s.buyerAgentId}</td><td>${s.criteria}</td><td>${s.price} ℏ</td>` +
-                `<td><span class="pill ${s.status}">${s.status}</span></td></tr>`,
-            )
-            .join("");
+
+          // Refusals are worth showing: they are the policy doing its job.
+          const declines = $("declines");
+          declines.textContent = data.declines?.length
+            ? `Refused on your behalf: ${data.declines
+                .map((d) => `${d.criteria} at ${d.price} ℏ (${d.reason})`)
+                .join(" · ")}`
+            : "";
         } catch {
           /* earnings are non-critical; leave the panel as-is */
         }
@@ -375,12 +406,73 @@
         loadStatus();
       });
 
-      $("run").addEventListener("click", () => {
+      let stream = null;
+
+      function runNegotiation() {
         const category = $("category").value;
         const price = $("price").value;
-        addEntry("buyer →", `offers ${price} ℏ for ${category} cohort data`, "");
-        $("run-status").textContent = "Live negotiation arrives in step 8.3.";
-      });
+        const button = $("run");
+
+        if (stream) stream.close();
+        state.entries = [];
+        renderLog();
+
+        button.disabled = true;
+        $("run-status").className = "status";
+        $("run-status").textContent = "Negotiating…";
+
+        stream = new EventSource(
+          `/api/negotiate?category=${encodeURIComponent(category)}&price=${encodeURIComponent(price)}`,
+        );
+
+        stream.onmessage = (event) => {
+          const e = JSON.parse(event.data);
+
+          if (e.type === "done") {
+            addEntry("—", e.text, e.kind);
+            $("run-status").textContent = "";
+            button.disabled = false;
+            stream.close();
+            stream = null;
+            loadEarnings();
+            return;
+          }
+
+          if (e.type === "error") {
+            addEntry("error", e.text, "decline");
+            $("run-status").className = "status error";
+            $("run-status").textContent = "The negotiation failed — see the log.";
+            button.disabled = false;
+            stream.close();
+            stream = null;
+            return;
+          }
+
+          if (e.type === "payment" && e.hashscanUrl) {
+            addEntry(
+              e.who,
+              `${escapeHtml(e.text.split(" — ")[0])} — <a href="${encodeURI(e.hashscanUrl)}" target="_blank" rel="noreferrer">view on HashScan</a>`,
+              e.kind,
+              true,
+            );
+            return;
+          }
+
+          addEntry(e.who ?? "", e.text ?? "", e.kind ?? "");
+        };
+
+        // Fires if the connection drops rather than closing cleanly.
+        stream.onerror = () => {
+          if (!stream) return;
+          $("run-status").className = "status error";
+          $("run-status").textContent = "Lost the connection to the backend.";
+          button.disabled = false;
+          stream.close();
+          stream = null;
+        };
+      }
+
+      $("run").addEventListener("click", runNegotiation);
 
       loadStatus();
       loadEarnings();

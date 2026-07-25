@@ -485,6 +485,9 @@ export class SellerExecutor implements AgentExecutor {
     const offer = extractOffer(requestContext.userMessage);
     const verdict = evaluateOffer(offer, await getPolicy());
     if (verdict.decision === "decline") {
+      // Refusals are recorded too: what the agent turned down on the owner's
+      // behalf is as much a part of the story as what it sold.
+      this.recordDecline(String(buyerAgentId), offer, verdict.reason);
       this.publishReply(requestContext, eventBus, verdict, identity);
       return;
     }
@@ -556,6 +559,44 @@ export class SellerExecutor implements AgentExecutor {
       },
       identity,
     );
+  }
+
+  /**
+   * Records a refused offer in the ledger.
+   *
+   * Only offers complete enough to have been judged on their merits are kept —
+   * a malformed message is not a decision the owner made. Best-effort: a
+   * bookkeeping failure must never change the answer the buyer receives.
+   */
+  private recordDecline(
+    buyerAgentId: string,
+    offer: Offer,
+    reason?: DeclineReason,
+  ): void {
+    if (!offer.category || offer.priceHbar === undefined || Number.isNaN(offer.priceHbar)) {
+      return;
+    }
+
+    try {
+      const db = openDatabase();
+      try {
+        insertQuery(
+          db,
+          buyerAgentId,
+          {
+            activityType: offer.category,
+            ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),
+            ...(reason ? { declineReason: reason } : {}),
+          },
+          offer.priceHbar,
+          "declined",
+        );
+      } finally {
+        db.close();
+      }
+    } catch (error) {
+      console.error("[ledger] could not record a declined offer:", error);
+    }
   }
 
   /** Publishes one reply and closes the exchange. */
