@@ -6,7 +6,7 @@ import {
   type ExecutionEventBus,
   type RequestContext,
 } from "@a2a-js/sdk/server";
-import { checkAvailability, UnknownTrackError } from "../data/catalog.js";
+import { checkAvailability, quotePrice, UnknownTrackError } from "../data/catalog.js";
 import {
   insertLicence,
   openDatabase,
@@ -24,10 +24,9 @@ import { certificateTokenId, mintCertificate } from "../hedera/certificate.js";
 import { parsePolicy } from "../policy/parser.js";
 import type { IdentityCheck, LicenceOffer, LicencePolicy } from "../types/marketplace.js";
 import {
-  COHORT_INSIGHT_PATH,
-  COHORT_INSIGHT_PRICE_HBAR,
-  COHORT_INSIGHT_PRICE_TINYBAR,
   HBAR_ASSET_ID,
+  hbarToTinybar,
+  LICENCE_GRANT_PATH,
   NETWORK,
   X402_BASE_URL,
 } from "../x402/config.js";
@@ -171,6 +170,8 @@ export function buildPaymentInstruction(
   offer: Required<Pick<LicenceOffer, "trackId" | "shares" | "licenceType" | "useCase">> &
     Pick<LicenceOffer, "territory">,
   licenceId: number,
+  /** The licence's quote (`quotePrice`) — each licence is priced per negotiation. */
+  quotedPriceHbar: number,
 ): PaymentInstruction {
   // The negotiated terms are baked into the URL by the seller rather than left
   // to the buyer — the x402 gate compares them against the stored acceptance,
@@ -187,10 +188,10 @@ export function buildPaymentInstruction(
   params.set("licenceId", String(licenceId));
 
   return {
-    url: `${X402_BASE_URL}${COHORT_INSIGHT_PATH}?${params}`,
+    url: `${X402_BASE_URL}${LICENCE_GRANT_PATH}?${params}`,
     method: "GET",
-    priceHbar: COHORT_INSIGHT_PRICE_HBAR,
-    priceTinybar: COHORT_INSIGHT_PRICE_TINYBAR,
+    priceHbar: String(quotedPriceHbar),
+    priceTinybar: hbarToTinybar(quotedPriceHbar),
     asset: HBAR_ASSET_ID,
     network: NETWORK,
     scheme: "exact",
@@ -650,6 +651,11 @@ export class SellerExecutor implements AgentExecutor {
       db.close();
     }
 
+    // Priced per negotiation: shares × the track's per-share rate. The x402
+    // route computes the same quote from the licence row, so the amount the
+    // buyer is told here is the amount the endpoint will actually charge.
+    const quotedPriceHbar = await quotePrice(offer.trackId!, offer.shares!);
+
     const payment = buildPaymentInstruction(
       {
         trackId: offer.trackId!,
@@ -659,6 +665,7 @@ export class SellerExecutor implements AgentExecutor {
         ...(offer.territory ? { territory: offer.territory.trim().toLowerCase() } : {}),
       },
       licenceId,
+      quotedPriceHbar,
     );
 
     this.publishReply(

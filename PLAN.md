@@ -172,7 +172,7 @@ Add an entry here at the end of every session/work block (newest on top). Format
 - **Deleting `aggregate.ts` moved the typecheck from 13 to 18 errors** — the new ones are `TS2307` (module not found) + downstream implicit-any in `seller-executor.ts` and `x402/server.ts`, both files already on the expected-breakage list (A's integration + block 3). `catalog.ts` itself compiles clean. Still nothing broken outside the pivot's blast radius.
 - `parseLicenceCriteria` is **strict where the old `parseCriteria` was lax**: the fitness version passed any string through for `ageRange`/`activityType`; this one drops anything outside the frozen vocabularies. A negotiated row written by the seller and the buyer's request URL therefore MUST both spell values lowercase — anything else vanishes and the binding gate reads it as a mismatch (fail-closed, intended).
 - `checkAvailability`/`quotePrice` open and close the database per call, same as `getCohortInsight` did — fine at demo scale.
-- `quotePrice` prices at the track's **base** price; the negotiated price can differ. The binding gate should compare against the negotiated row's price, not re-quote.
+- ~~`quotePrice` prices at the track's **base** price; the negotiated price can differ. The binding gate should compare against the negotiated row's price, not re-quote.~~ **Resolved in O.9:** the acceptance instruction and the x402 route both price via `quotePrice` over the licence row's track + shares, so the amount advertised is the amount charged.
 
 ### 2026-07-25 — Emre — Claude Code session (49) — **PIVOT lane B** — P2.2
 **Completed:** P2.2 — catalogue seed. `scripts/seed-catalog.ts` added, `scripts/seed-data.ts` deleted.
@@ -205,7 +205,7 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** Phase 9.3 — the demo script draft now has the haggle as a panel-native beat; finish timings and spoken lines.
 **Known issues / things to watch for:**
 - **The strategy is deliberately rule-based** — three rules, no LLM in the negotiation loop. Sell it as "light strategy", not AI bargaining; the honest framing is stronger.
-- A deal negotiated at 0.4 ℏ is still **charged 0.5 ℏ** by the fixed-price route (the session-28 mismatch). The strategy's budget cap covers it (budget ≥ 0.5 settles; budget 0.45 would refuse to pay after accepting — correct but odd-looking). Keep panel demos at budget ≥ 0.5.
+- ~~A deal negotiated at 0.4 ℏ is still **charged 0.5 ℏ** by the fixed-price route (the session-28 mismatch).~~ **Resolved in O.9:** the fixed route price is gone — `/licence/grant` quotes each licence dynamically via `quotePrice`.
 - The floor disclosure is one-way and minimal: category/data-type refusals reveal nothing ("not a matter of price"), so probing prices doesn't leak the catalog.
 - Panel: leaving "Auto-haggle up to" empty keeps the old single-shot behavior; the field placeholder says "off".
 - Still open: earnings sum negotiated vs charged price; `create-audit-topic.ts` FORCE guard; `vitest` + `@langchain/openai` unused.
@@ -443,7 +443,7 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **Verification:** `npx tsc --noEmit` clean. **9/9** over live A2A: an accepted offer returns `{url:"http://localhost:4021/data/cohort-insight?activityType=running", method:"GET", priceHbar:"0.5", priceTinybar:"50000000", asset:"0.0.0", network:"hedera:testnet", scheme:"exact"}` with `cohortSize=3`; a declined offer carries **no** payment instruction. Then the decisive check — took the URL the seller handed back, unpaid → **402**, and `scripts/x402-buy.ts` against it → **200** with `{"participantCount":3,"avgSessionCount":5.3,"avgPerformanceScore":64.3,"trend":"down"}`, settlement `success=true`, tx `0.0.7162784@1784955670.930044735`.
 **What the next person should do:** Phase 7.2 — have the buyer agent read `metadata.payment` off the acceptance and pay it **without a hardcoded URL**. `scripts/x402-buy.ts` still has the endpoint baked in; 7.2 should drive it from the negotiation result.
 **Known issues / things to watch for:**
-- **The negotiated price and the charged price are two different numbers.** The policy accepts anything ≥ `minPrice` (0.4 ℏ), but the x402 route has a fixed price of **0.5 ℏ** — so an accepted 0.4 ℏ offer would be billed 0.5 ℏ. The instruction states the real charge, so nothing is hidden, but making the route price per-negotiation is unfinished business. Keep the demo offer at 0.5 ℏ and it does not surface.
+- ~~**The negotiated price and the charged price are two different numbers.**~~ **Resolved in O.9 (music pivot):** the route price is now computed per licence via `quotePrice`, so the instruction and the charge cannot drift.
 - The seller builds the URL **including the criteria**, so the buyer pays for the cohort that was actually negotiated rather than substituting its own filter afterwards.
 - `X402_BASE_URL` is overridable by env but defaults to `http://localhost:4021`; the seller agent hands out that literal URL, so it only works for a buyer on the same machine.
 
