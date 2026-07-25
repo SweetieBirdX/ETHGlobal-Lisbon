@@ -3,7 +3,9 @@ import type { Server } from "node:http";
 import express from "express";
 import { createSellerApp, SELLER_PORT } from "../src/a2a/seller-server.js";
 import { sendNegotiationMessage } from "../src/a2a/buyer-client.js";
-import { verifyBuyerIdentity } from "../src/a2a/seller-executor.js";
+import { setPolicy, verifyBuyerIdentity } from "../src/a2a/seller-executor.js";
+import { getSellerUaid } from "../src/identity/agent-ids.js";
+import { deriveUaid, UAID_PROTO } from "../src/identity/uaid.js";
 import {
   assertSufficientBalance,
   EndpointUnreachableError,
@@ -20,12 +22,18 @@ import {
  *
  *   npx tsx scripts/test-error-cases.ts
  *
- * Pays for no data: every scenario fails before a payment for a cohort is
- * signed. It is no longer strictly free — the two agent ids that exist on-chain
- * (`103`, and the live-seller cases) reach gate 1, which writes a compliance
- * attestation pair to HCS. That is a fraction of a cent in fees, not the 0.5 ℏ
- * a purchase costs.
+ * Pays for no licence: every scenario fails before a payment is signed. It is
+ * not strictly free — the registered identities that reach gate 1 get a real
+ * compliance attestation pair written to HCS. That is a fraction of a cent in
+ * fees, not what a purchase costs.
  */
+
+const LICENCE_POLICY = {
+  allowedLicenceTypes: ["sync", "sampling"],
+  minPricePerShareHbar: 0.0001,
+  maxSharesPerLicence: 1_000_000,
+  forbiddenUseCases: ["political-ad"],
+};
 
 const checks: [string, boolean, string][] = [];
 
@@ -49,7 +57,7 @@ async function networkErrors(): Promise<void> {
 
   // The x402 endpoint is not running.
   try {
-    await payAndFetch("http://localhost:4999/data/cohort-insight?activityType=running");
+    await payAndFetch("http://localhost:4999/licence/grant?trackId=1&licenceId=1");
     record("unreachable x402 endpoint is reported", false, "no error thrown");
   } catch (error) {
     record(
@@ -77,7 +85,7 @@ async function timeouts(): Promise<void> {
 
   const blackHole = startBlackHoleServer(4997);
   try {
-    await payAndFetch("http://localhost:4997/data/cohort-insight", { timeoutMs: 2_000 });
+    await payAndFetch("http://localhost:4997/licence/grant", { timeoutMs: 2_000 });
     record("unresponsive endpoint times out", false, "no error thrown");
   } catch (error) {
     const message = (error as Error).message;
@@ -126,21 +134,21 @@ async function insufficientBalance(): Promise<void> {
   }
 }
 
-async function invalidAgentIds(): Promise<void> {
-  console.log("\n=== Invalid agent ids ===\n");
+async function invalidBuyerIds(): Promise<void> {
+  console.log("\n=== Invalid buyer ids ===\n");
 
   const cases: [string, string][] = [
-    ["999999999", "never minted"],
-    ["not-a-number", "not numeric"],
+    ["999999999", "not a UAID"],
+    ["did:uaid:", "empty id segment"],
     ["", "empty"],
-    ["-1", "negative"],
-    ["103", "registered but not attested (the seller's own id)"],
+    [deriveUaid("0.0.99999999", { proto: UAID_PROTO }), "valid shape, never registered"],
+    [getSellerUaid(), "registered but not on the approved list (the seller's own UAID)"],
   ];
 
-  for (const [agentId, description] of cases) {
-    const result = await verifyBuyerIdentity(agentId);
+  for (const [uaid, description] of cases) {
+    const result = await verifyBuyerIdentity(uaid);
     record(
-      `agentId "${agentId}" (${description}) is refused`,
+      `buyer id "${uaid.slice(0, 34)}" (${description}) is refused`,
       result.verified === false,
       result.reason.slice(0, 120),
     );
@@ -150,14 +158,19 @@ async function invalidAgentIds(): Promise<void> {
 async function negotiationEdgeCases(): Promise<void> {
   console.log("\n=== Negotiation edge cases (live seller) ===\n");
 
+  setPolicy(LICENCE_POLICY);
   const server = createSellerApp().listen(SELLER_PORT);
   await new Promise((resolve) => setTimeout(resolve, 1_000));
 
+  const terms = { trackId: 1, shares: 200, licenceType: "sync", useCase: "film" };
+
   try {
-    // An impostor claiming an id that was never minted. The buyer client sends
-    // its own real id, so the raw path is used to forge one.
-    const raw = await sendNegotiationMessage("We offer a price of 5 HBAR for running data.", {
-      buyerAgentId: "999999999",
+    // An impostor claiming an identity that was never registered. The buyer
+    // client sends its own real UAID, so the raw path is used to forge one.
+    const raw = await sendNegotiationMessage("We offer 5 HBAR for a sync licence.", {
+      buyerUaid: deriveUaid("0.0.999999", { proto: UAID_PROTO }),
+      offeredPriceHbar: 5,
+      ...terms,
     });
     record(
       "unregistered agent cannot buy",
@@ -166,11 +179,10 @@ async function negotiationEdgeCases(): Promise<void> {
     );
     record("no payment instruction for an unverified agent", raw.payment === undefined);
 
-
-    // Absurd price, permitted category: policy allows it, so it should accept.
+    // Absurd price, permitted terms: policy allows it, so it should accept.
     const generous = await sendNegotiationMessage("Offer attached.", {
       offeredPriceHbar: 1_000_000,
-      category: "running",
+      ...terms,
     });
     record(
       "an absurdly generous offer is still handled",
@@ -181,7 +193,7 @@ async function negotiationEdgeCases(): Promise<void> {
     // Negative and non-numeric prices must not be treated as valid offers.
     const negative = await sendNegotiationMessage("Offer attached.", {
       offeredPriceHbar: -5,
-      category: "running",
+      ...terms,
     });
     record(
       "negative price is refused",
@@ -191,7 +203,7 @@ async function negotiationEdgeCases(): Promise<void> {
 
     const nonNumeric = await sendNegotiationMessage("Offer attached.", {
       offeredPriceHbar: "free",
-      category: "running",
+      ...terms,
     });
     record(
       "non-numeric price is refused",
@@ -199,18 +211,31 @@ async function negotiationEdgeCases(): Promise<void> {
       nonNumeric.reply.slice(0, 90),
     );
 
-    // A cohort too small to report on.
-    const narrow = await sendNegotiationMessage("Offer attached.", {
-      offeredPriceHbar: 0.5,
-      category: "running",
-      ageRange: "45-54",
+    // More shares than the track has ever had.
+    const oversized = await sendNegotiationMessage("Offer attached.", {
+      offeredPriceHbar: 100,
+      ...terms,
+      shares: 20_000,
     });
     record(
-      "a cohort of one is refused, unpaid",
-      narrow.decision === "decline" && narrow.reason === "cohort_too_small",
-      narrow.reply.slice(0, 110),
+      "an over-capacity licence is refused, unpaid",
+      oversized.decision === "decline" && oversized.reason === "insufficient_shares",
+      oversized.reply.slice(0, 110),
+    );
+
+    // A track that does not exist.
+    const phantom = await sendNegotiationMessage("Offer attached.", {
+      offeredPriceHbar: 1,
+      ...terms,
+      trackId: 424242,
+    });
+    record(
+      "an unknown track is refused, unpaid",
+      phantom.decision === "decline" && phantom.reason === "unknown_track",
+      phantom.reply.slice(0, 110),
     );
   } finally {
+    setPolicy(null);
     server.close();
   }
 }
@@ -222,7 +247,7 @@ async function main(): Promise<void> {
   await networkErrors();
   await timeouts();
   await insufficientBalance();
-  await invalidAgentIds();
+  await invalidBuyerIds();
   await negotiationEdgeCases();
 
   const passed = checks.filter(([, ok]) => ok).length;

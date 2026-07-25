@@ -1,9 +1,9 @@
 /**
  * Agent profile documents for the HCS identity registry. Owner: P1.
  *
- * Ports the shape of the old ERC-8004 registration files (erc8004/registration-files.ts)
- * with everything EVM dropped: no on-chain URI, no token image — the profile itself is
- * published to an HCS topic and read back through the mirror node.
+ * Ports the shape of the old ERC-8004 registration files with everything EVM
+ * dropped: no on-chain URI, no token image — the profile itself is published
+ * to an HCS topic and read back through the mirror node.
  */
 
 import { createHash } from "node:crypto";

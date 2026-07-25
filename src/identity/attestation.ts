@@ -96,9 +96,9 @@ export function validatorUaid(): string {
 /**
  * Opens a validation request for an agent.
  *
- * Mirrors `validationRequest(validatorAddress, agentId, requestURI, requestHash)`.
- * The document is hashed so the record stays checkable even though the URI
- * travels inline.
+ * Mirrors the ValidationRegistry's request shape (validator, subject, URI,
+ * hash). The document is hashed so the record stays checkable even though the
+ * URI travels inline.
  */
 export async function requestValidation(agentUaid: string): Promise<ValidationWrite> {
   parseUaid(agentUaid); // throws on malformed input
