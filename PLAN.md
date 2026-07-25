@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 1 — Hedera Base Layer (1.1-1.2 done; next: 1.3 create HCS audit topic)
+**Active phase:** Phase 1 — Hedera Base Layer (1.1-1.3 done; next: 1.4 HCS message submission helper)
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -27,7 +27,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 ### Phase 1 — Hedera Base Layer
 - [x] 1.1 Seller/buyer Hedera clients
 - [x] 1.2 Balance query test script
-- [ ] 1.3 Create HCS audit topic (→ write `HCS_AUDIT_TOPIC_ID` to `.env`!)
+- [x] 1.3 Create HCS audit topic (→ write `HCS_AUDIT_TOPIC_ID` to `.env`!)
 - [ ] 1.4 HCS message submission helper function
 - [ ] 1.5 Simple HBAR transfer test
 
@@ -104,6 +104,13 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (8)
+**Completed:** Phase 1.3
+**Files changed:** `scripts/create-audit-topic.ts` (new) — seller client + `TopicCreateTransaction().setTopicMemo("Data Marketplace Audit Trail")`, reads `topicId` off the receipt (throws with the receipt status if it is null), prints the id, a HashScan link and the ready-to-paste `.env` line; `seller.close()` in a `finally`. `.env` updated (not committed) with the resulting topic id.
+**Verification:** `npx tsc --noEmit` clean. `npx tsx scripts/create-audit-topic.ts` against real testnet created **topic `0.0.9738154`** → https://hashscan.io/testnet/topic/0.0.9738154. `HCS_AUDIT_TOPIC_ID=0.0.9738154` written into `.env` (single occurrence, verified). A throwaway `scripts/_topiccheck.ts` then read the id back from `.env` and ran a real `TopicInfoQuery`: `topic: 0.0.9738154 | memo: Data Marketplace Audit Trail`. Throwaway deleted.
+**What the next person should do:** Phase 1.4 — the HCS message submission helper in `src/hedera/` (`TopicMessageSubmitTransaction` against `HCS_AUDIT_TOPIC_ID`).
+**Known issues / things to watch for:** The script creates a **new** topic on every run — it is not idempotent, so don't re-run it casually or `.env` will point at a topic while older audit messages live on the previous one. Anyone setting up a fresh machine runs it once and pastes the id. Throwaway scripts must live inside the repo (not the system temp dir): `package.json` has `"type": "module"`, so a `.ts` file outside the project is transformed as CJS by tsx and top-level `await` fails.
 
 ### 2026-07-25 — Emre — Claude Code session (7)
 **Completed:** Phase 1.2
