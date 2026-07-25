@@ -1,94 +1,60 @@
 import "dotenv/config";
 import { ChatGroq } from "@langchain/groq";
 import { z } from "zod";
+import {
+  LICENCE_TYPES,
+  USE_CASES,
+  type LicencePolicy,
+} from "../types/marketplace.js";
 
 /**
- * Turns the owner's plain-language instructions into a machine-checkable policy.
+ * Turns the rights holder's plain-language instructions into a machine-checkable policy.
  *
- * This is the point of the whole design: the user says once, in their own
- * words, what they are willing to sell and for how much — and from then on the
- * agent applies it to every offer without waking them up. The LLM only ever
+ * This is the point of the whole design: the artist says once, in their own
+ * words, what they are willing to license and for how much — and from then on
+ * the agent applies it to every offer without waking them up. The LLM only ever
  * produces this small structured object; it never decides an individual deal.
  */
 
 export const MODEL = "llama-3.3-70b-versatile";
 
-/** Activity categories present in the owner's data (Phase 6.2). */
-export const KNOWN_CATEGORIES = [
-  "running",
-  "cycling",
-  "swimming",
-  "strength",
-] as const;
-
-/**
- * Fitness/performance metrics — the bucket the demo owner actually sells from.
- */
-export const PERFORMANCE_DATA_TYPES = [
-  "performanceScore",
-  "sessionCount",
-  "activeMinutes",
-  "distance",
-  "heartRate",
-  "vo2max",
-  "sleep",
-] as const;
-
-/**
- * Health-category data types. These exist in the store as clearly-synthetic
- * flag/count fields *so the policy gate has something real to refuse* — the
- * demo owner's policy never permits them. An owner CAN permit them explicitly;
- * that is their data and their call, which is the project's whole premise.
- * (This reverses the session-26 hard-drop; see CLAUDE.md rule 7.)
- */
-export const HEALTH_DATA_TYPES = ["cycleTracking", "medicationCount"] as const;
-
-/** Every metric a buyer can ask to have aggregated, across both buckets. */
-export const KNOWN_DATA_TYPES = [
-  ...PERFORMANCE_DATA_TYPES,
-  ...HEALTH_DATA_TYPES,
-] as const;
-
-export type DataTypeBucket = "performance" | "health";
-
-/** Which bucket a data type belongs to — used for legible refusals. */
-export function bucketOf(dataType: string): DataTypeBucket | undefined {
-  if ((PERFORMANCE_DATA_TYPES as readonly string[]).includes(dataType)) {
-    return "performance";
-  }
-  if ((HEALTH_DATA_TYPES as readonly string[]).includes(dataType)) return "health";
-  return undefined;
-}
+/** A track's whole licensing capacity, in basis points. */
+const FULL_CAPACITY = 10000;
 
 export const policySchema = z.object({
-  allowedCategories: z
+  allowedLicenceTypes: z
     .array(z.string())
     .describe(
-      `Activity categories the user is willing to sell. Use only: ${KNOWN_CATEGORIES.join(", ")}. Empty array means nothing is allowed.`,
+      `Licence types the rights holder is willing to grant. Use only: ${LICENCE_TYPES.join(", ")}. Empty array means nothing is licensed.`,
     ),
-  minPrice: z
+  minPricePerShareHbar: z
     .number()
     .nonnegative()
-    .describe("Minimum acceptable price in HBAR for one cohort insight."),
-  allowedDataTypes: z
+    .describe("Minimum acceptable price in HBAR per share (one basis point of a track)."),
+  maxSharesPerLicence: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe(
+      `Largest share of one track a single licence may take, in basis points — ${FULL_CAPACITY} is the whole track, so "half" is 5000 and "5%" is 500.`,
+    ),
+  forbiddenUseCases: z
     .array(z.string())
     .describe(
-      `Metrics the user is willing to have aggregated. Use only: ${KNOWN_DATA_TYPES.join(", ")}.`,
+      `Uses the rights holder refuses outright. Use only: ${USE_CASES.join(", ")}. Empty array means no use is forbidden.`,
     ),
 });
 
-export type DataPolicy = z.infer<typeof policySchema>;
-
 const SYSTEM_PROMPT =
-  "You convert a person's instructions about selling their own fitness data into a strict policy object. " +
-  `Valid categories: ${KNOWN_CATEGORIES.join(", ")}. ` +
-  `Data types come in two buckets. Performance: ${PERFORMANCE_DATA_TYPES.join(", ")}. ` +
-  `Health: ${HEALTH_DATA_TYPES.join(", ")}. ` +
-  "Phrases like 'never sell health data', 'no medical information' or 'no health data' exclude the ENTIRE health bucket. " +
-  "Health data types may only appear when the person explicitly and specifically permits them " +
-  "(e.g. 'you may sell my cycle tracking stats' permits cycleTracking). " +
-  "Include only what the person actually permits. If they exclude something, leave it out rather than listing it. " +
-  "If they give no price, use 0. Never invent categories or data types outside the valid lists.";
+  "You convert a musician's instructions about licensing their own tracks into a strict policy object. " +
+  `Valid licence types: ${LICENCE_TYPES.join(", ")}. ` +
+  `Valid use cases: ${USE_CASES.join(", ")}. ` +
+  `Shares are basis points of one track's licensing capacity: ${FULL_CAPACITY} is the entire track, ` +
+  "so 'half' or '50%' is 5000 and '5%' is 500. " +
+  "Phrases like 'never for political ads' or 'no political advertising' mean forbiddenUseCases includes political-ad. " +
+  "forbiddenUseCases lists ONLY uses the person explicitly refuses; allowedLicenceTypes lists ONLY licence types they actually permit. " +
+  "If they give no price, use 0. If they set no share cap, use " +
+  `${FULL_CAPACITY}. Never invent licence types or use cases outside the valid lists.`;
 
 function requireApiKey(): string {
   const key = process.env.GROQ_API_KEY;
@@ -103,9 +69,9 @@ function requireApiKey(): string {
 /**
  * Drops anything the model invented outside the known vocabularies.
  *
- * The schema guarantees the *shape*; this guarantees the *contents*. A category
- * the data does not contain would silently widen what the agent sells, so an
- * unrecognised value is discarded rather than trusted.
+ * The schema guarantees the *shape*; this guarantees the *contents*. A licence
+ * type the marketplace does not trade would silently widen what the agent
+ * sells, so an unrecognised value is discarded rather than trusted.
  */
 function keepKnown(values: string[], known: readonly string[]): string[] {
   const lookup = new Map(known.map((k) => [k.toLowerCase(), k]));
@@ -116,13 +82,14 @@ function keepKnown(values: string[], known: readonly string[]): string[] {
 }
 
 /**
- * Parses a natural-language policy statement.
+ * Parses a natural-language licensing policy statement.
  *
- * @param input e.g. "Sell my running and cycling data for at least 0.4 HBAR, but never my heart rate."
+ * @param input e.g. "Sell sync licences for my tracks, at least 0.05 HBAR per
+ * share, never more than 50% in total, and never for political advertising."
  */
-export async function parsePolicy(input: string): Promise<DataPolicy> {
+export async function parsePolicy(input: string): Promise<LicencePolicy> {
   if (!input.trim()) {
-    throw new Error("Policy input is empty — describe what you are willing to sell.");
+    throw new Error("Policy input is empty — describe what you are willing to license.");
   }
 
   const model = new ChatGroq({
@@ -140,10 +107,12 @@ export async function parsePolicy(input: string): Promise<DataPolicy> {
   ]);
 
   // Validate again after filtering: the model can satisfy the schema while
-  // still naming a category that does not exist in the data.
+  // still naming a licence type the marketplace does not trade, or a share
+  // cap larger than a track.
   return policySchema.parse({
-    allowedCategories: keepKnown(raw.allowedCategories, KNOWN_CATEGORIES),
-    minPrice: raw.minPrice,
-    allowedDataTypes: keepKnown(raw.allowedDataTypes, KNOWN_DATA_TYPES),
+    allowedLicenceTypes: keepKnown(raw.allowedLicenceTypes, LICENCE_TYPES),
+    minPricePerShareHbar: raw.minPricePerShareHbar,
+    maxSharesPerLicence: Math.min(raw.maxSharesPerLicence, FULL_CAPACITY),
+    forbiddenUseCases: keepKnown(raw.forbiddenUseCases, USE_CASES),
   });
 }
