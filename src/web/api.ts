@@ -28,6 +28,66 @@ export function getCurrentStatement(): string {
   return currentStatement;
 }
 
+const MIRROR_NODE = "https://testnet.mirrornode.hedera.com";
+
+interface MirrorTopicMessage {
+  sequence_number: number;
+  consensus_timestamp: string;
+  message: string;
+}
+
+export interface AuditEntry {
+  sequenceNumber: number;
+  /** Consensus time, as an ISO string. */
+  timestamp: string;
+  /** `json` = written by this app, `text` = written by the Agent Kit hook. */
+  kind: "json" | "text";
+  summary: string;
+  payload: unknown;
+}
+
+/**
+ * Turns one topic message into something displayable.
+ *
+ * The topic carries two shapes: the JSON entries this app writes, and the
+ * plain-text lines the Hedera Agent Kit's audit hook writes. Both are real
+ * history, so the view has to read both rather than assume its own format.
+ */
+function toAuditEntry(message: MirrorTopicMessage): AuditEntry {
+  const text = Buffer.from(message.message, "base64").toString("utf8");
+  const seconds = Number(message.consensus_timestamp.split(".")[0]);
+  const timestamp = new Date(seconds * 1000).toISOString();
+
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const event = String(parsed["event"] ?? "event");
+    const detail = [
+      parsed["buyerAgentId"] ? `buyer #${parsed["buyerAgentId"]}` : "",
+      parsed["priceHbar"] !== undefined ? `${parsed["priceHbar"]} ℏ` : "",
+      parsed["criteria"] ? JSON.stringify(parsed["criteria"]) : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
+    return {
+      sequenceNumber: message.sequence_number,
+      timestamp,
+      kind: "json",
+      summary: detail ? `${event} — ${detail}` : event,
+      payload: parsed,
+    };
+  } catch {
+    // The hook writes multi-line prose; the first line carries the substance.
+    return {
+      sequenceNumber: message.sequence_number,
+      timestamp,
+      kind: "text",
+      summary: text.split("\n")[0]!.trim().slice(0, 160),
+      payload: text,
+    };
+  }
+}
+
 function safeParse(json: string): Record<string, unknown> {
   try {
     return JSON.parse(json) as Record<string, unknown>;
@@ -234,6 +294,51 @@ export function createApiRouter(): Router {
       send("error", { who: "error", text: String(error).slice(0, 240), kind: "decline" });
     } finally {
       res.end();
+    }
+  });
+
+  /**
+   * The public audit trail, read from Hedera rather than from our own records.
+   *
+   * This is the check a sceptic should make: the panel does not show what the
+   * app *thinks* happened, it shows what the consensus service recorded, pulled
+   * back through the mirror node — the same source HashScan renders.
+   */
+  api.get("/audit", async (_req, res) => {
+    const topicId = process.env.HCS_AUDIT_TOPIC_ID;
+
+    if (!topicId) {
+      res.status(503).json({
+        error:
+          "HCS_AUDIT_TOPIC_ID is not set — run `npx tsx scripts/create-audit-topic.ts` and add it to .env.",
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${MIRROR_NODE}/api/v1/topics/${topicId}/messages?order=desc&limit=25`,
+        { signal: AbortSignal.timeout(15_000) },
+      );
+
+      if (!response.ok) {
+        res.status(502).json({
+          error: `Mirror node responded ${response.status} for topic ${topicId}.`,
+        });
+        return;
+      }
+
+      const body = (await response.json()) as { messages?: MirrorTopicMessage[] };
+
+      res.json({
+        topicId,
+        hashscanUrl: `https://hashscan.io/testnet/topic/${topicId}`,
+        entries: (body.messages ?? []).map(toAuditEntry),
+      });
+    } catch (error) {
+      res.status(502).json({
+        error: `Could not reach the mirror node: ${String(error).slice(0, 160)}`,
+      });
     }
   });
 

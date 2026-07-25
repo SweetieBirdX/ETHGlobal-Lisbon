@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 8 — Frontend (8.1-8.4 done). Next: 8.5 — HCS audit trail view.
+**Active phase:** Phase 9 — Documentation and Demo (9.1 done). Next: 9.2 — bonus requirement coverage table.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -76,10 +76,10 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 8.2 Policy input form
 - [x] 8.3 Live negotiation log (SSE)
 - [x] 8.4 Earnings panel
-- [ ] 8.5 HCS audit trail view
+- [x] 8.5 HCS audit trail view
 
 ### Phase 9 — Documentation and Demo
-- [ ] 9.1 README architecture section
+- [x] 9.1 README architecture section
 - [ ] 9.2 Bonus requirement coverage table
 - [ ] 9.3 Demo script
 - [ ] 9.4 Clean-environment setup test
@@ -104,6 +104,36 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (38)
+**Completed:** Phase 9.1
+**Files changed:** `README.md` — rewritten in full: the idea and why it inverts the data-broker model, an ASCII architecture diagram, a **component table** saying where each Hedera piece is used and what it actually does, the **three gates** (identity → policy → cohort size), setup in dependency order, verification commands, ports, repo layout, and an honest limits section. `.env.example` — **`OPENAI_API_KEY` → `GROQ_API_KEY`**.
+**Verification:** wrote a throwaway checker that validates every factual claim in the README against the repo — **31/32 passed on the first run**, and the failure was a real bug (below). After the fix, all script and source paths named in the README exist, the three npm scripts are defined, every env var in the setup table is present in `.env.example`, both contract addresses match `src/erc8004/contracts.ts`, the quoted agent ids match `agent-ids.json` (103/104), the three ports match the code, and `MIN_COHORT_SIZE` really is 3.
+**Bug found and fixed:** `.env.example` still listed **`OPENAI_API_KEY`** — a leftover from the switch to Groq in session 26. Anyone setting up from a clean clone would have followed the template and ended up without `GROQ_API_KEY`, so the policy parser would have failed at first use. This is exactly the class of error Phase 9.4 (clean-environment setup test) exists to catch, found early.
+**What the next person should do:** Phase 9.2 — the bonus requirement coverage table. The README's component table is a good starting point but is written for a reader, not for a judging checklist.
+**Known issues / things to watch for:**
+- **`@langchain/openai` is still declared in `package.json` but no longer imported anywhere.** Harmless, but worth removing so the dependency list matches what the project actually uses.
+- The README deliberately states the limits out loud: the simulated compliance attestation, `trend` not being a time series, the synthetic seeded population, and the fixed 0.5 ℏ endpoint price versus the policy floor. Better a judge reads them from us than finds them unmentioned.
+- The project name in the README is still the working one. Changing it later is free — only `registration-files.ts` is frozen on-chain, and even that can be updated in place with `setAgentURI` without minting new ids.
+
+### 2026-07-25 — Emre — Claude Code session (37)
+**Completed:** Phase 8.5 — **Phase 8 is done**
+**Files changed:** `src/web/api.ts` — `GET /audit` pulls the last 25 messages from the mirror node (`/api/v1/topics/{topicId}/messages?order=desc&limit=25`), decodes each from base64 and normalises it through `toAuditEntry()`. `src/web/index.html` — fourth panel listing the entries with sequence number, summary and consensus time, a link to the topic on HashScan, a Refresh button, and an automatic refresh when a negotiation completes.
+**Verification:** `npx tsc --noEmit` clean, inline script re-parsed, page now has four panels and serves at 19,685 bytes. Live against topic `0.0.9738154` — **7 entries**, both shapes rendered correctly:
+```
+#7 [json] data_access_completed — buyer #104 · 0.5 ℏ · {"activityType":"running"}
+#4 [json] data_access_completed — buyer #104 · 0.5 ℏ · {"activityType":"running"}
+#3 [json] audit_log_test
+#2 [text] Agent executed tool get_hbar_balance_query_tool on with params {
+#1 [json] audit_log_test
+```
+**What the next person should do:** Phase 9.1 — the README architecture section.
+**Known issues / things to watch for:**
+- **The topic carries two message formats and the view reads both** (flagged back in session 11): our JSON entries, and the Hedera Agent Kit hook's plain-text lines — entry `#2` above is the hook's. `toAuditEntry` tries `JSON.parse` and falls back to the first line of prose, tagging each `json` or `text` so they are visually distinguishable rather than one silently rendering as garbage.
+- **This panel is the strongest thing to show a sceptical judge**: it displays what Hedera recorded, fetched from the mirror node — the same source HashScan renders — not what the app believes happened. The topic link lets anyone check it independently.
+- The error branches (`HCS_AUDIT_TOPIC_ID` unset → 503, mirror node non-200 → 502) are written and typechecked but **were not exercised** — an attempt to test the unset case in a subprocess produced no output and I did not pursue it. The success path is fully verified.
+- Consensus timestamps are rendered as UTC; entries are newest-first.
+- The mirror node lags consensus by a few seconds, so pressing Refresh immediately after a run can miss the newest entry. The negotiation stream already waits for completion before triggering a refresh.
 
 ### 2026-07-25 — Emre — Claude Code session (36)
 **Completed:** Phase 8.4

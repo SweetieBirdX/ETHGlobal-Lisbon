@@ -13,6 +13,11 @@
         --line: #262e3d;
         --text: #e6ebf2;
         --muted: #8b97a8;
+        /* Brand: Hedera purple. Change this one value to re-skin the panel. */
+        --brand: #8259ef;
+        --brand-hover: #9370f2;
+        --brand-ink: #f3efff;
+        /* Semantics stay conventional — green reads as "accepted", not "brand". */
         --accent: #4ade80;
         --accent-dim: #1c3a2a;
         --danger: #f87171;
@@ -35,7 +40,33 @@
         align-items: baseline;
         justify-content: space-between;
       }
-      h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+      h1 {
+        font-size: 18px;
+        margin: 0;
+        letter-spacing: -0.01em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      /* Mark: two linked squares — the two agents dealing directly. */
+      .mark {
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+        background: linear-gradient(135deg, var(--brand) 0%, #b18cff 100%);
+        position: relative;
+        flex: 0 0 auto;
+      }
+      .mark::after {
+        content: "";
+        position: absolute;
+        inset: 6px 6px auto auto;
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        background: var(--bg);
+      }
+      .agents b.net { color: var(--brand-hover); }
       h2 {
         font-size: 12px;
         text-transform: uppercase;
@@ -76,16 +107,17 @@
         font: inherit;
         resize: vertical;
       }
-      textarea:focus, input:focus, select:focus { outline: 2px solid #2f4a6b; border-color: transparent; }
+      textarea:focus, input:focus, select:focus { outline: 2px solid var(--brand); border-color: transparent; }
       button {
-        background: var(--accent);
-        color: #08140d;
+        background: var(--brand);
+        color: var(--brand-ink);
         border: 0;
         border-radius: 7px;
         padding: 10px 16px;
         font: 600 14px/1 inherit;
         cursor: pointer;
       }
+      button:hover:not(:disabled) { background: var(--brand-hover); }
       button:disabled { opacity: 0.5; cursor: not-allowed; }
       button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
       .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
@@ -162,16 +194,34 @@
       .pill.completed { background: var(--accent-dim); color: var(--accent); }
       .pill.declined { background: var(--danger-dim); color: var(--danger); }
       .pill.accepted { background: #2a2f1f; color: var(--warn); }
-      a { color: #7dd3fc; }
+      a { color: var(--brand-hover); }
+      a:hover { color: var(--brand-ink); }
       .status { font-size: 12px; color: var(--muted); min-height: 18px; }
       .status.error { color: var(--danger); }
       .declines { font-size: 12px; color: var(--muted); margin: 12px 0 0; line-height: 1.6; }
+
+      .audit { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+      .audit-entry {
+        display: grid;
+        grid-template-columns: 34px 1fr;
+        gap: 10px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-left-width: 2px;
+        border-radius: 6px;
+        padding: 8px 10px;
+        font: 12px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+      }
+      .audit-entry.json { border-left-color: var(--accent); }
+      .audit-entry.text { border-left-color: #5b6b85; }
+      .audit-entry .seq { color: var(--muted); }
+      .audit-entry .when { color: var(--muted); font-size: 11px; }
     </style>
   </head>
   <body>
     <header>
       <div>
-        <h1>Personal Fitness Data Marketplace</h1>
+        <h1><span class="mark" aria-hidden="true"></span>Personal Fitness Data Marketplace</h1>
         <p class="sub">
           Your agent negotiates on your behalf. You set the rules once — no transaction asks for your approval.
         </p>
@@ -179,7 +229,7 @@
       <div class="agents">
         <span>seller <b id="seller-agent">—</b></span>
         <span>buyer <b id="buyer-agent">—</b></span>
-        <span>network <b>hedera:testnet</b></span>
+        <span>network <b class="net">hedera:testnet</b></span>
       </div>
     </header>
 
@@ -215,6 +265,21 @@
             </tbody>
           </table>
           <p class="declines" id="declines"></p>
+        </section>
+
+        <!-- 4. Audit trail -->
+        <section class="panel">
+          <h2>Audit trail on Hedera</h2>
+          <p class="declines" style="margin-top: -6px">
+            Read back from the mirror node, not from this app's own records.
+            <a id="topic-link" href="#" target="_blank" rel="noreferrer">view topic ↗</a>
+          </p>
+          <div class="audit" id="audit">
+            <p class="empty">Loading…</p>
+          </div>
+          <div class="actions">
+            <button id="refresh-audit" class="secondary">Refresh</button>
+          </div>
         </section>
       </div>
 
@@ -394,6 +459,42 @@
         }
       }
 
+      async function loadAudit() {
+        const box = $("audit");
+        try {
+          const res = await fetch("/api/audit");
+          const data = await res.json();
+
+          if (!res.ok) {
+            box.innerHTML = `<p class="empty">${escapeHtml(data.error)}</p>`;
+            return;
+          }
+
+          $("topic-link").href = data.hashscanUrl;
+          $("topic-link").textContent = `topic ${data.topicId} ↗`;
+
+          if (!data.entries?.length) {
+            box.innerHTML = '<p class="empty">No audit entries on the topic yet.</p>';
+            return;
+          }
+
+          box.innerHTML = data.entries
+            .map(
+              (e) =>
+                `<div class="audit-entry ${e.kind}">` +
+                `<span class="seq">#${e.sequenceNumber}</span>` +
+                `<div>${escapeHtml(e.summary)}<div class="when">${escapeHtml(
+                  e.timestamp.replace("T", " ").replace(".000Z", " UTC"),
+                )}</div></div></div>`,
+            )
+            .join("");
+        } catch (error) {
+          box.innerHTML = `<p class="empty">Could not load the audit trail: ${escapeHtml(error.message)}</p>`;
+        }
+      }
+
+      $("refresh-audit").addEventListener("click", loadAudit);
+
       $("save-policy").addEventListener("click", savePolicy);
 
       // Ctrl/Cmd+Enter saves, so the demo does not need a mouse.
@@ -435,6 +536,8 @@
             stream.close();
             stream = null;
             loadEarnings();
+            // The chain has just been confirmed, so the topic has a new entry.
+            loadAudit();
             return;
           }
 
@@ -476,6 +579,7 @@
 
       loadStatus();
       loadEarnings();
+      loadAudit();
     </script>
   </body>
 </html>
