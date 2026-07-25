@@ -188,9 +188,10 @@ npm run test:catalog     # availability, pricing, grants, policy parsing — 25 
 npm run test:errors      # failure modes: bad ids, unreachable endpoints, empty policy — 18 checks
 npm run test:identity    # the four identity checks against the live registry — 33 checks, HCS fees only
 npm run test:e2e         # full negotiation → payment → grant → chain — 22 checks, spends real HBAR
+npm run test:rounds      # multi-round haggle in one A2A task — 22 checks, spends real HBAR
 ```
 
-The first three counts were confirmed by running them while writing this README; `test:e2e`'s 22 is its own last recorded green run. `test:e2e` makes real testnet payments and appends real HCS entries, so it is neither free nor idempotent — that is rather the point of it. `test:identity` writes real attestations (HCS fees, fractions of a cent) but buys nothing; `test:catalog` and `test:errors` spend nothing at all.
+All five counts were confirmed by running the suites. `test:e2e` and `test:rounds` make real testnet payments and append real HCS entries, so they are neither free nor idempotent — that is rather the point of them; each also takes shares out of a track's capacity permanently. `test:identity` writes real attestations (HCS fees, fractions of a cent) but buys nothing; `test:catalog` and `test:errors` spend nothing at all.
 
 The most convincing check is the panel's fourth pane: it lists the audit trail pulled from the **mirror node**, the same source HashScan renders. Every entry can be verified independently of anything this app claims.
 
@@ -225,14 +226,7 @@ Stated plainly, because a judge who knows these standards will ask.
 - **Everything runs on Hedera testnet.** No real funds move.
 - **The task store is in-memory.** Negotiations do not survive a server restart; a counter-offer to a restarted seller gets "Task not found".
 - **A buyer must associate with the certificate collection before it can receive one.** `create-licence-token.ts` associates the demo buyer; any additional buyer would need its own association first, and a sale without a certificate shows `—` in the panel.
-- **One test suite has not been migrated.** `npm run test:rounds` (multi-round negotiation) still speaks the pre-pivot offer shape and does not compile. The behaviour it covers is exercised through the panel's auto-haggle field instead. It is the only red thing in the repo.
-
-### Rough edges as of this commit
-
-Two things a reviewer running it fresh will hit. Both are small and known:
-
-- **The built-in default policy is stale.** `DEFAULT_POLICY_STATEMENT` still holds the pre-pivot sentence, so a fresh `npm run dev` starts with a policy that refuses everything. Save your terms in the panel first (or set `POLICY_STATEMENT`) and it behaves.
-- **The policy floor and the track price use different units.** The floor is applied per basis point while the policy sentence reads naturally as per percent, so an accepted offer can read "offers 25 ℏ … pays 0.41 ℏ". The amount actually charged is always the track quote, and the panel reports that charged figure — but the two numbers in the negotiation log do not yet line up.
+- **The policy floor and the track quote are two separate knobs.** The floor comes from the rights holder's sentence (`minPricePerShareHbar × shares`); the price charged is the track's own rate (`quotePrice`). With the shipped defaults a 5% licence has a 0.5 ℏ floor and a 0.41 ℏ quote, so an accepted offer reads "offers 0.5 ℏ … pays 0.41 ℏ". Nothing is mischarged — the buyer always pays the quote, and the panel reports the charged figure — but the two numbers are not the same number, by design.
 
 ---
 

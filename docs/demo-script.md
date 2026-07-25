@@ -158,5 +158,5 @@ Point at the hint line under the form before clicking.
 
 - **Don't rehearse with "Send offer".** Every acceptance spends real HBAR *and* permanently reduces track 1's capacity — rehearse enough times and beat 2's track runs out mid-take.
 - **Don't film across midnight.** Earnings timestamps render as `HH:MM` only.
-- **Don't skip beat 1.** The panel's built-in default policy is stale (see `docs/bounty-coverage.md`), so the agent refuses everything until terms are saved. Beat 1 does that naturally — but if you re-record beats out of order, save the terms first.
+- **Beat 1's sentence is not optional set-dressing.** The panel ships with a working default policy, so the agent *will* trade before you touch the form — but its defaults are not the numbers the rest of this script assumes. Save the beat-1 sentence before recording beats 2–4, and re-save it if you re-record them out of order.
 - **Don't read the parsed JSON aloud field by field.** Point at it; the sentence above it is the story.
