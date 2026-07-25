@@ -1,19 +1,16 @@
 {
   "name": "ethglobal-lisbon",
   "version": "1.0.0",
-  "description": "Users keep ownership of their own fitness data: a personal AI agent negotiates access with a research company's agent over the A2A protocol, identity is verified via ERC-8004, and accepted deals settle instantly as HBAR micropayments on Hedera testnet via x402 — with no human approving any individual transaction.",
+  "description": "Music rights holders keep ownership of their catalogue: their licensing agent negotiates fractional track licences with a content producer's agent over the A2A protocol, identity lives on HCS (HCS-14 UAIDs), and accepted deals settle instantly as HBAR micropayments on Hedera testnet via x402 — with no human approving any individual transaction.",
   "main": "index.js",
   "scripts": {
     "test": "npm run test:e2e",
     "build": "tsc",
     "test:e2e": "tsx scripts/full-e2e-test.ts",
     "test:errors": "tsx scripts/test-error-cases.ts",
-    "test:binding": "tsx scripts/test-payment-binding.ts",
     "test:identity": "tsx scripts/test-identity.ts",
-    "test:receipt": "tsx scripts/test-receipt-nft.ts",
     "test:catalog": "tsx scripts/test-catalog.ts",
     "test:rounds": "tsx scripts/test-multiround.ts",
-    "verify:phase7": "tsx scripts/verify-phase7.ts",
     "web": "tsx src/web/server.ts",
     "dev": "tsx src/dev-server.ts"
   },
