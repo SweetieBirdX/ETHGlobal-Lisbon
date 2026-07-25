@@ -12,6 +12,7 @@
     "test:validation": "tsx scripts/test-validation.ts",
     "test:identity": "tsx scripts/test-identity.ts",
     "test:receipt": "tsx scripts/test-receipt-nft.ts",
+    "test:catalog": "tsx scripts/test-catalog.ts",
     "test:rounds": "tsx scripts/test-multiround.ts",
     "verify:phase7": "tsx scripts/verify-phase7.ts",
     "web": "tsx src/web/server.ts",
