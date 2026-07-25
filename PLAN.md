@@ -8,18 +8,16 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 0 — Project Skeleton (not started yet)
-**Last updated by:** —
-**Last updated on:** —
-
-> Whoever starts the first session should fill this block in.
+**Active phase:** Phase 0 — Project Skeleton (in progress, 0.1 done)
+**Last updated by:** Emre (Claude session)
+**Last updated on:** 2026-07-25
 
 ---
 
 ## Progress Checklist
 
 ### Phase 0 — Project Skeleton
-- [ ] 0.1 Repo and base files
+- [x] 0.1 Repo and base files
 - [ ] 0.2 package.json and TypeScript setup
 - [ ] 0.3 Install dependencies
 - [ ] 0.4 Folder structure
@@ -107,7 +105,14 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **Known issues / things to watch for:** ...
 ```
 
-*(No entries yet — whoever starts the first session should add the first one.)*
+### 2026-07-25 — Emre — Claude Code session
+**Completed:** Phase 0.1
+**Files changed:** `.gitignore` (was empty — filled with node_modules/, .env, dist/, *.log, .DS_Store), `LICENSE` (Apache-2.0, new), `README.md` (project name + one-sentence description + "Setup (coming soon)"), `PLAN.md`
+**Verification:** Created throwaway `node_modules/x.js`, `dist/y.js`, `.env`, `test.log`, `.DS_Store` — none appeared in `git status`; `git check-ignore -v` matched each to its rule. Files removed afterwards.
+**What the next person should do:** Phase 0.2 — `package.json` + TypeScript setup.
+**Known issues / things to watch for:**
+- `ProjectFiles/` is **tracked** in git (3 files) even though commit 8f39dd6 was titled "exclude ProjectFiles" — the `.gitignore` was actually committed empty. Decide whether the reference docs should stay in the repo; if not, they need `git rm --cached` + a `.gitignore` entry (an entry alone won't untrack them).
+- `prompt-list.md` is referenced by `CLAUDE.md` but is not present in `ProjectFiles/` — commit messages per step can't be looked up until it's added.
 
 ---
 
