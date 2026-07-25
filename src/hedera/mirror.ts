@@ -72,10 +72,14 @@ export async function fetchTopicMessages(
 
   const body = (await response.json()) as { messages?: MirrorTopicMessage[] };
 
-  // Group chunk rows back into logical messages, preserving newest-first order.
+  return groupChunkRows(body.messages ?? []).map(decodeChunkGroup);
+}
+
+/** Groups chunk rows back into logical messages, preserving newest-first order. */
+function groupChunkRows(rows: MirrorTopicMessage[]): MirrorTopicMessage[][] {
   const groups: MirrorTopicMessage[][] = [];
   const byInitialTx = new Map<string, MirrorTopicMessage[]>();
-  for (const row of body.messages ?? []) {
+  for (const row of rows) {
     const info = row.chunk_info;
     const tx = info?.initial_transaction_id;
     if (!info || info.total <= 1 || !tx) {
@@ -92,33 +96,35 @@ export async function fetchTopicMessages(
       groups.push(started);
     }
   }
+  return groups;
+}
 
-  return groups.map((group) => {
-    const chunks = [...group].sort(
-      (a, b) => (a.chunk_info?.number ?? 1) - (b.chunk_info?.number ?? 1),
-    );
-    // Concatenate as bytes before decoding — a chunk boundary can fall inside
-    // a multi-byte UTF-8 character.
-    const text = Buffer.concat(
-      chunks.map((chunk) => Buffer.from(chunk.message, "base64")),
-    ).toString("utf8");
-    let json: Record<string, unknown> | undefined;
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (parsed && typeof parsed === "object") {
-        json = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Not ours — the Agent Kit's audit hook writes plain text.
+/** Reassembles one chunk group into a decoded logical message. */
+function decodeChunkGroup(group: MirrorTopicMessage[]): TopicMessage {
+  const chunks = [...group].sort(
+    (a, b) => (a.chunk_info?.number ?? 1) - (b.chunk_info?.number ?? 1),
+  );
+  // Concatenate as bytes before decoding — a chunk boundary can fall inside
+  // a multi-byte UTF-8 character.
+  const text = Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk.message, "base64")),
+  ).toString("utf8");
+  let json: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (parsed && typeof parsed === "object") {
+      json = parsed as Record<string, unknown>;
     }
-    const last = chunks[chunks.length - 1]!;
-    return {
-      sequenceNumber: last.sequence_number,
-      consensusTimestamp: last.consensus_timestamp,
-      text,
-      json,
-    };
-  });
+  } catch {
+    // Not ours — the Agent Kit's audit hook writes plain text.
+  }
+  const last = chunks[chunks.length - 1]!;
+  return {
+    sequenceNumber: last.sequence_number,
+    consensusTimestamp: last.consensus_timestamp,
+    text,
+    json,
+  };
 }
 
 /** Highest sequence number on the topic, or 0 when it is empty. */
@@ -144,12 +150,15 @@ export async function countTopicEventsSince(
   afterSequence: number,
   topicId: string = requireAuditTopicId(),
 ): Promise<number> {
-  let count = 0;
+  // Collect every raw row above the baseline first, THEN group: a chunked
+  // message parses only as a whole, and its chunks can straddle a page.
+  const rows: MirrorTopicMessage[] = [];
   let url = `${MIRROR_NODE}/api/v1/topics/${topicId}/messages?order=desc&limit=100`;
+  let reachedBaseline = false;
 
   // A test run writes ~10 messages, so one page is the norm; the loop is a
   // guard against a busy topic, not an expectation.
-  for (let page = 0; page < 5; page += 1) {
+  for (let page = 0; page < 5 && !reachedBaseline; page += 1) {
     const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
     if (!response.ok) {
       throw new Error(`Mirror node responded ${response.status} for topic ${topicId}.`);
@@ -161,19 +170,18 @@ export async function countTopicEventsSince(
     const messages = body.messages ?? [];
 
     for (const message of messages) {
-      if (message.sequence_number <= afterSequence) return count;
-      const text = Buffer.from(message.message, "base64").toString("utf8");
-      try {
-        const parsed = JSON.parse(text) as Record<string, unknown>;
-        if (parsed["event"] === event) count += 1;
-      } catch {
-        /* the Agent Kit hook writes prose — never an event */
+      if (message.sequence_number <= afterSequence) {
+        reachedBaseline = true;
+        break;
       }
+      rows.push(message);
     }
 
-    if (!body.links?.next || messages.length === 0) return count;
+    if (!body.links?.next || messages.length === 0) break;
     url = `${MIRROR_NODE}${body.links.next}`;
   }
 
-  return count;
+  return groupChunkRows(rows)
+    .map(decodeChunkGroup)
+    .filter((message) => message.json?.["event"] === event).length;
 }
