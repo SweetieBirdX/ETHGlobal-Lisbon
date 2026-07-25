@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 1 — Hedera Base Layer (1.1-1.3 done; next: 1.4 HCS message submission helper)
+**Active phase:** Phase 1 — Hedera Base Layer (1.1-1.4 done; next: 1.5 simple HBAR transfer test)
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -28,7 +28,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 1.1 Seller/buyer Hedera clients
 - [x] 1.2 Balance query test script
 - [x] 1.3 Create HCS audit topic (→ write `HCS_AUDIT_TOPIC_ID` to `.env`!)
-- [ ] 1.4 HCS message submission helper function
+- [x] 1.4 HCS message submission helper function
 - [ ] 1.5 Simple HBAR transfer test
 
 ### Phase 2 — Hedera Agent Kit
@@ -104,6 +104,13 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (8b)
+**Completed:** Phase 1.4
+**Files changed:** `src/hedera/audit.ts` (new) — `logAuditEvent(client, message, topicId?)` JSON-stringifies the object (adding an ISO `timestamp` unless the caller supplies one), submits it with `TopicMessageSubmitTransaction`, and returns `{ topicId, sequenceNumber, transactionId }`; topic id defaults to `HCS_AUDIT_TOPIC_ID` and throws pointing at `scripts/create-audit-topic.ts` when unset. `scripts/test-audit-log.ts` (new) — `TopicInfoQuery` before/after around one write, asserts the count went up by exactly 1 (sets exit code 1 otherwise) and prints the HashScan link.
+**Verification:** `npx tsc --noEmit` clean. `npx tsx scripts/test-audit-log.ts` against real testnet: `Messages before: 0` → sequence 1, tx `0.0.9696085@1784945187.799581596` → `Messages after: 1`, "OK — message count increased by 1". Content confirmed independently through the mirror node (what HashScan reads): `GET /api/v1/topics/0.0.9738154/messages` returned sequence 1 = `{"timestamp":"2026-07-25T02:06:32.654Z","event":"audit_log_test","note":"Phase 1.4 verification"}`.
+**What the next person should do:** Phase 1.5 — simple HBAR transfer test (buyer → seller) with `TransferTransaction`.
+**Known issues / things to watch for:** **Phases 1.3 and 1.4 are not committed yet** — the 1.3 commit was declined and 1.4 was written on top of it, so `scripts/create-audit-topic.ts`, `src/hedera/audit.ts`, `scripts/test-audit-log.ts` and this PLAN update are all still working-tree changes. `logAuditEvent` reads `HCS_AUDIT_TOPIC_ID` at call time via a default parameter, so `dotenv` must already be loaded (it is — `src/hedera/audit.ts` imports `dotenv/config` itself). Topic sequence numbers are cumulative, so later phases' tests keep appending to the same topic.
 
 ### 2026-07-25 — Emre — Claude Code session (8)
 **Completed:** Phase 1.3
