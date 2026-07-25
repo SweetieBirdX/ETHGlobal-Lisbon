@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 3 — x402 Payment Layer (3.1 done). Next: 3.2 — Express server skeleton.
+**Active phase:** Phase 3 — x402 Payment Layer (3.1-3.2 done). Next: 3.3 — x402 middleware integration.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -38,7 +38,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ### Phase 3 — x402 Payment Layer
 - [x] 3.1 Mock data provider
-- [ ] 3.2 Express server skeleton
+- [x] 3.2 Express server skeleton
 - [ ] 3.3 x402 middleware integration
 - [ ] 3.4 Buyer-side payment script
 - [ ] 3.5 End-to-end payment test
@@ -104,6 +104,13 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (12b)
+**Completed:** Phase 3.2
+**Files changed:** `src/x402/server.ts` (new — rebuilt after `19bb162` deleted the `1e4162e` version) — express app on port **4021**; `GET /catalog` returns the price list (`path`, `description`, `price` `0.5`, `asset` `0.0.0` = native HBAR, `network` `hedera-testnet`, `params`), `GET /data/cohort-insight` is **unprotected for now** and returns `MockDataProvider` output, passing `req.query` through as the criteria. Exports `app`, `PORT` and `COHORT_INSIGHT_PRICE_HBAR` so 3.3 can wrap the data route with the x402 middleware and reuse the same price constant. `/catalog` stays free by design — a buyer agent must be able to discover the price before it can decide to pay.
+**Verification:** `npx tsc --noEmit` clean. Started with `npx tsx src/x402/server.ts` and hit it with curl: `/catalog` → HTTP 200 with the catalog JSON; `/data/cohort-insight?ageRange=25-34&activityType=running` → HTTP 200 `{"participantCount":212,"avgPerformanceScore":64.9,"trend":"up"}`; a second call returned different numbers (`216 / 90.5 / down`), confirming live provider calls rather than a cached body; unknown route → HTTP 404. Server stopped afterwards.
+**What the next person should do:** Phase 3.3 — x402 middleware in front of `/data/*`. The x402 packages are **still not installed**; `X402_FACILITATOR_URL` (`https://api.testnet.blocky402.com`) and `X402_PAY_TO_ACCOUNT` (= `SELLER_ACCOUNT_ID`) are still empty in `.env.example`/`.env`.
+**Known issues / things to watch for:** The server calls `app.listen()` at module load, so importing `src/x402/server.ts` from a test starts a real listener on 4021 — if 3.5's end-to-end test needs the app without the port, guard the `listen` call then. Everything from session (12) below still applies (unrun Phase 1.5, dependency split).
 
 ### 2026-07-25 — Emre — Claude Code session (12)
 **Completed:** Phase 3.1 (plus a review of everything pulled in `adfb396..19bb162`)
