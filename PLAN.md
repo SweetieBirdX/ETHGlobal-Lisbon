@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 3 — x402 Payment Layer (3.1-3.2 done). Next: 3.3 — x402 middleware integration.
+**Active phase:** Phase 3 — x402 Payment Layer (3.1-3.3 done). Next: 3.4 — buyer-side payment script.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -39,7 +39,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 ### Phase 3 — x402 Payment Layer
 - [x] 3.1 Mock data provider
 - [x] 3.2 Express server skeleton
-- [ ] 3.3 x402 middleware integration
+- [x] 3.3 x402 middleware integration
 - [ ] 3.4 Buyer-side payment script
 - [ ] 3.5 End-to-end payment test
 
@@ -104,6 +104,18 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (12c)
+**Completed:** Phase 3.3 — **the price is decided: 0.5 HBAR per cohort query** (= `50000000` tinybar, asset `0.0.0`)
+**Files changed:** `src/x402/server.ts` — `GET /data/cohort-insight` is now wrapped in x402. `package.json`/`package-lock.json` — added `@x402/core`, `@x402/hedera`, `@x402/express`, all pinned to **2.16.0** (the exact set `matevszm/x402-hedera-example` runs, rather than latest 2.19.0).
+**How it is wired (Express, where the reference repo uses Hono):**
+- `new x402ResourceServer(new HTTPFacilitatorClient({ url: X402_FACILITATOR_URL })).register("hedera:*", new ExactHederaScheme())` — `hedera:*` covers every Hedera network, so mainnet needs no code change.
+- `routes = { "GET /data/cohort-insight": { description, accepts: { scheme: "exact", network: "hedera:testnet", payTo: X402_PAY_TO_ACCOUNT, price: { asset: "0.0.0", amount: <tinybar> }, maxTimeoutSeconds: 180 } } }`, applied with `app.use(paymentMiddleware(routes, x402Server))`. Only paths listed in `routes` are charged, so `/catalog` stays free — a buyer agent must be able to read the price before deciding to pay.
+- The tinybar amount is derived with `Hbar.fromString("0.5").toTinybars()` rather than hard-coded, and both forms are exported (`COHORT_INSIGHT_PRICE_HBAR`, `COHORT_INSIGHT_PRICE_TINYBAR`) for 3.4/3.5 and the catalog.
+- **The server holds no Hedera key** — verification/settlement belong to the facilitator; the seller only declares where the money goes. `maxTimeoutSeconds: 180` gives the buyer agent room to sign and submit a real transaction between the 402 and the retry.
+**Verification:** `npx tsc --noEmit` clean. Server started against the real blocky402 facilitator: `/catalog` → **HTTP 200** (free) advertising `price 0.5`, `priceAtomic 50000000`, `asset 0.0.0`, `network hedera:testnet`, `payTo 0.0.9696085`. Unpaid `GET /data/cohort-insight?ageRange=25-34&activityType=running` → **HTTP 402** with a `PAYMENT-REQUIRED` header that decodes to `x402Version 2`, `accepts: [{ scheme: "exact", network: "hedera:testnet", amount: "50000000", asset: "0.0.0", payTo: "0.0.9696085", maxTimeoutSeconds: 180, extra: { feePayer: "0.0.7162784" } }]`. The `feePayer` value comes from the facilitator itself, which proves the startup sync against `https://api.testnet.blocky402.com` succeeded. Server stopped afterwards.
+**What the next person should do:** Phase 3.4 — buyer-side payment script. Reference: `scripts/x402-sign.ts` / `scripts/e2e-pay.ts` in the example repo, using `@x402/fetch` + `@x402/hedera/exact/client` (`@x402/fetch` is **not installed yet**). The 402 → sign → 200 round trip is 3.5.
+**Known issues / things to watch for:** The 402 body is `{}` (the library default) — everything a buyer needs is in the `PAYMENT-REQUIRED` header, base64-encoded JSON; a custom `unpaidResponseBody` could be added later if the demo UI wants it visible. The `paymentMiddleware` syncs with the facilitator on startup by default, so the server needs network access at boot. Phase 3.5 will spend real testnet HBAR from the buyer account on every run.
 
 ### 2026-07-25 — Emre — Claude Code session (12b)
 **Completed:** Phase 3.2
