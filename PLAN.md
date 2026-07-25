@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 7 — Full Integration (7.1-7.2 done). Next: 7.3 — post-payment audit log + reputation.
+**Active phase:** Phase 7 — Full Integration (7.1-7.3 done). Next: 7.4 — full end-to-end test script.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -67,7 +67,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 ### Phase 7 — Full Integration
 - [x] 7.1 Accept → x402 routing
 - [x] 7.2 Buyer agent autonomous payment trigger
-- [ ] 7.3 Post-payment audit log + reputation chain
+- [x] 7.3 Post-payment audit log + reputation chain
 - [ ] 7.4 Full end-to-end test script
 - [ ] 7.5 Error handling and edge cases
 
@@ -104,6 +104,18 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (30)
+**Completed:** Phase 7.3 — **the full loop now closes on-chain: negotiate → pay → audit → reputation → ledger**
+**Files changed:** `src/a2a/seller-executor.ts` — accepting an offer now writes a `queries` row (status `accepted`) and threads its id into the payment URL; new exported `recordCompletedSale(queryId, transactionId)` runs the three steps **in order** (HCS `logAuditEvent` → `submitFeedback` → `updateQueryStatus(..., "completed")`). `src/x402/server.ts` — `scheduleCompletion()` hooks `res.on("finish")`, decodes the `PAYMENT-RESPONSE` header and fires the chain. `src/data/db.ts` — added `completed` to `QueryStatus` **and** to the SQL CHECK constraint.
+**Verification:** `npx tsc --noEmit` clean. One real end-to-end run with both servers live — **6/6**: HCS topic went `seq 3 → 4`, reputation feedback for agent 104 went `count 1 → 2`, and the `queries` row came back `id=1 buyer=104 price=0.5 status=completed tx_hash=0.0.7162784@1784957443.798647849 criteria={"activityType":"running"}`. The server logged `[settle] query 1 completed — buyer 104, payment 0.0.7162784@…, HCS seq 4, feedback #2`. The HCS message itself reads `{"event":"data_access_completed","queryId":1,"buyerAgentId":"104","criteria":{"activityType":"running"},"priceHbar":0.5,"paymentTransactionId":"0.0.7162784@…"}` — checked for raw per-user fields (`vo2max`, `restingHeartRate`, `performanceScore`, `weeklyDistance`): **none present**.
+**What the next person should do:** Phase 7.4 — the scripted full end-to-end test. It should own both server lifecycles and assert the same six things this session verified by hand.
+**Known issues / things to watch for:**
+- **The chain runs where the payment confirms, not in the executor.** The x402 middleware settles *after* the route handler has produced its body, so the transaction id does not exist inside the handler — it arrives in the `PAYMENT-RESPONSE` header set just before the response flushes. Hence `res.on("finish")`. `recordCompletedSale` itself lives in `seller-executor.ts` as the prompt asked.
+- The chain is **fire-and-forget**: the buyer gets its data immediately and the two Hedera writes happen behind it. They take **~15-25 s** to appear on the mirror node, so any test must wait before asserting (25 s was enough here). Do not treat a 200 as proof the audit entry exists yet.
+- Each step is attempted **even if an earlier one fails**, and failures are collected in `CompletedSale.errors` and logged rather than swallowed — a reputation outage must not cost the audit trail its record.
+- **The `queries` CHECK constraint changed, and SQLite bakes it into the table.** `CREATE TABLE IF NOT EXISTS` will not alter an existing database, so `fitness-data.db` was deleted and reseeded. Anyone with an older file must do the same or `completed` will be rejected.
+- `queryId` travels in the payment URL and is trusted as-is. Fine for the demo; a real deployment would sign it, since a buyer could pay against someone else's negotiation id.
 
 ### 2026-07-25 — Emre — Claude Code session (29)
 **Completed:** Phase 7.2 — **the buyer agent now negotiates and pays end to end with no human and no hardcoded endpoint**

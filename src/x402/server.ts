@@ -1,6 +1,8 @@
 import "dotenv/config";
-import express from "express";
+import express, { type Response } from "express";
 import { paymentMiddleware } from "@x402/express";
+import { decodePaymentResponseHeader } from "@x402/core/http";
+import { recordCompletedSale } from "../a2a/seller-executor.js";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import type { RoutesConfig } from "@x402/core/server";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
@@ -108,12 +110,59 @@ app.get("/catalog", (_req, res) => {
 // Only paths present in `routes` are charged; everything else passes through.
 app.use(paymentMiddleware(routes, x402Server));
 
+/**
+ * Runs the seller's post-payment chain once the response is on its way out.
+ *
+ * The middleware settles *after* the handler has produced its body, so the
+ * transaction id only exists at that point — it arrives in the `PAYMENT-RESPONSE`
+ * header, which is set just before the response is flushed.
+ */
+function scheduleCompletion(res: Response, queryId: number): void {
+  res.on("finish", () => {
+    if (res.statusCode !== 200) return;
+
+    const header = res.getHeader("payment-response") ?? res.getHeader("x-payment-response");
+    if (!header) {
+      console.warn(`[settle] no PAYMENT-RESPONSE header; queryId ${queryId} left open`);
+      return;
+    }
+
+    let transactionId: string;
+    try {
+      transactionId = String(decodePaymentResponseHeader(String(header)).transaction);
+    } catch (error) {
+      console.error(`[settle] could not decode PAYMENT-RESPONSE:`, error);
+      return;
+    }
+
+    // Deliberately not awaited: the buyer already has its data, and the audit
+    // and reputation writes are Hedera transactions of their own.
+    recordCompletedSale(queryId, transactionId)
+      .then((sale) => {
+        console.log(
+          `[settle] query ${sale.queryId} completed — buyer ${sale.buyerAgentId}, ` +
+            `payment ${sale.transactionId}, HCS seq ${sale.auditSequenceNumber ?? "-"}, ` +
+            `feedback #${sale.feedbackIndex ?? "-"}`,
+        );
+        for (const problem of sale.errors) console.error(`[settle] ${problem}`);
+      })
+      .catch((error) => console.error("[settle] post-payment chain failed:", error));
+  });
+}
+
 app.get(COHORT_INSIGHT_PATH, async (req, res) => {
   // Reaching this handler means the facilitator has verified the payment.
   // Query params become the cohort filter; the records themselves are decrypted
   // in memory and reduced to statistics, so nothing per-user leaves here.
   try {
-    res.json(await getCohortInsight(parseCriteria(req.query)));
+    const insight = await getCohortInsight(parseCriteria(req.query));
+
+    const queryId = Number(req.query["queryId"]);
+    if (Number.isInteger(queryId) && queryId > 0) {
+      scheduleCompletion(res, queryId);
+    }
+
+    res.json(insight);
   } catch (error) {
     if (error instanceof CohortTooSmallError) {
       // 422: the request was well-formed and paid for, but answering it would

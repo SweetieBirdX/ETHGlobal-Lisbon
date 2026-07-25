@@ -12,9 +12,18 @@ import {
   getCohortInsight,
   MIN_COHORT_SIZE,
 } from "../data/aggregate.js";
+import {
+  insertQuery,
+  openDatabase,
+  updateQueryStatus,
+  type QueryRow,
+} from "../data/db.js";
 import { getApprovedAgentIds } from "../erc8004/agent-ids.js";
 import { identityRegistry } from "../erc8004/contracts.js";
+import { SCORE_SUCCESS, submitFeedback } from "../erc8004/feedback.js";
 import { fromDataUri } from "../erc8004/registration-files.js";
+import { logAuditEvent } from "../hedera/audit.js";
+import { createSellerClient } from "../hedera/clients.js";
 import { parsePolicy, type DataPolicy } from "../policy/parser.js";
 import {
   COHORT_INSIGHT_PATH,
@@ -140,9 +149,13 @@ export function extractText(message: Message): string {
 export function buildPaymentInstruction(
   activityType: string,
   ageRange?: string,
+  queryId?: number,
 ): PaymentInstruction {
   const params = new URLSearchParams({ activityType });
   if (ageRange) params.set("ageRange", ageRange);
+  // Carries the negotiation into the payment, so the seller can tie a settled
+  // transaction back to the buyer and terms that were agreed.
+  if (queryId !== undefined) params.set("queryId", String(queryId));
 
   return {
     url: `${X402_BASE_URL}${COHORT_INSIGHT_PATH}?${params}`,
@@ -153,6 +166,91 @@ export function buildPaymentInstruction(
     network: NETWORK,
     scheme: "exact",
   };
+}
+
+export interface CompletedSale {
+  queryId: number;
+  buyerAgentId: string;
+  transactionId: string;
+  /** HCS sequence number of the audit entry, when the write succeeded. */
+  auditSequenceNumber?: number;
+  /** ReputationRegistry index of the feedback, when the write succeeded. */
+  feedbackIndex?: string;
+  /** Steps that failed, so a partial completion is never reported as clean. */
+  errors: string[];
+}
+
+/**
+ * Everything the seller does *after* a payment settles, in order:
+ * write the audit entry to HCS, publish reputation feedback about the buyer,
+ * then mark the sale complete in the local ledger.
+ *
+ * Each step is attempted even if an earlier one failed — a reputation outage
+ * should not cost the audit trail its record — and every failure is reported
+ * back rather than swallowed.
+ */
+export async function recordCompletedSale(
+  queryId: number,
+  transactionId: string,
+): Promise<CompletedSale> {
+  const db = openDatabase();
+  const errors: string[] = [];
+
+  try {
+    const query = db
+      .prepare("SELECT * FROM queries WHERE id = ?")
+      .get(queryId) as QueryRow | undefined;
+
+    if (!query) {
+      throw new Error(`No negotiation recorded for queryId ${queryId}`);
+    }
+
+    const result: CompletedSale = {
+      queryId,
+      buyerAgentId: query.buyer_agent_id,
+      transactionId,
+      errors,
+    };
+
+    // 1. Audit trail on HCS — the public, tamper-evident record that this
+    //    exchange happened, carrying no raw data.
+    const seller = createSellerClient();
+    try {
+      const audit = await logAuditEvent(seller, {
+        event: "data_access_completed",
+        queryId,
+        buyerAgentId: query.buyer_agent_id,
+        criteria: JSON.parse(query.criteria),
+        priceHbar: query.price,
+        paymentTransactionId: transactionId,
+      });
+      result.auditSequenceNumber = audit.sequenceNumber;
+    } catch (error) {
+      errors.push(`HCS audit log failed: ${String(error).slice(0, 160)}`);
+    } finally {
+      seller.close();
+    }
+
+    // 2. Reputation — the buyer paid as agreed, and the feedback cites the
+    //    transaction so the claim is checkable.
+    try {
+      const feedback = await submitFeedback(
+        query.buyer_agent_id,
+        SCORE_SUCCESS,
+        transactionId,
+      );
+      result.feedbackIndex = feedback.feedbackIndex;
+    } catch (error) {
+      errors.push(`Reputation feedback failed: ${String(error).slice(0, 160)}`);
+    }
+
+    // 3. Local ledger.
+    updateQueryStatus(db, queryId, "completed", transactionId);
+
+    return result;
+  } finally {
+    db.close();
+  }
 }
 
 /** Reads the offer out of the message metadata the buyer client attaches. */
@@ -382,7 +480,23 @@ export class SellerExecutor implements AgentExecutor {
       throw error;
     }
 
-    const payment = buildPaymentInstruction(activityType, offer.ageRange);
+    // Record the agreed terms before handing out a payment URL, so a settled
+    // payment can be matched back to who agreed to what.
+    const db = openDatabase();
+    let queryId: number;
+    try {
+      queryId = insertQuery(
+        db,
+        String(buyerAgentId),
+        { activityType, ...(offer.ageRange ? { ageRange: offer.ageRange } : {}) },
+        offer.priceHbar!,
+        "accepted",
+      );
+    } finally {
+      db.close();
+    }
+
+    const payment = buildPaymentInstruction(activityType, offer.ageRange, queryId);
 
     this.publishReply(
       requestContext,

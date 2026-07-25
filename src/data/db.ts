@@ -26,7 +26,14 @@ const KEY_LENGTH = 32;
 /** Named so a row records *which* key encrypted it, not the key itself. */
 export const DEFAULT_KEY_REF = "owner-master-key";
 
-export type QueryStatus = "pending" | "accepted" | "declined" | "paid" | "delivered";
+export type QueryStatus =
+  | "pending"
+  | "accepted"
+  | "declined"
+  | "paid"
+  | "delivered"
+  /** Paid, delivered, audited on HCS and rated on the ReputationRegistry. */
+  | "completed";
 
 export interface UserRow {
   id: number;
@@ -132,7 +139,7 @@ export function openDatabase(path: string = DEFAULT_DB_PATH): Database.Database 
       criteria       TEXT    NOT NULL,
       price          REAL    NOT NULL,
       status         TEXT    NOT NULL DEFAULT 'pending'
-                     CHECK (status IN ('pending','accepted','declined','paid','delivered')),
+                     CHECK (status IN ('pending','accepted','declined','paid','delivered','completed')),
       tx_hash        TEXT,
       created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
     );
