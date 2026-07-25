@@ -119,6 +119,25 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **Known issues / things to watch for:** ...
 ```
 
+### 2026-07-26 — Emre — Claude Code session (51) — demo policy floor aligned with the real catalogue
+**Completed:** `DEFAULT_POLICY_STATEMENT`'s minimum price per share lowered **0.001 → 0.0008 ℏ**, so an offer at a track's own quoted price clears the policy on *every* track rather than on the expensive ones only.
+**The measurement that drove it** — read straight off the `tracks` table, because the range quoted in the request (0.00005–0.0002 ℏ) was stale:
+
+| | ℏ/share |
+|---|---|
+| **Real seeded range** | **0.00082 – 0.00198** (t1 0.00082, t3 0.00095, t2 0.00105, t4 0.00144, t5 0.0015, t7 0.00197, t6 0.00198) |
+| Range named in the request | 0.00005 – 0.0002 — the figure from the *original P2.2 prompt*, which was overridden at the time (see the P2.2 entry below); ~10× low |
+| Configured draw range in `seed-catalog.ts` | 0.0005 – 0.002 — correct as recorded; the seven realised draws land in the narrower band above |
+
+At the old 0.001 floor, an offer at `quotePrice` was **refused on tracks 1 and 3** (0.00082, 0.00095) and accepted on the other five — so whether the demo worked depended on which track was picked. The request's "every track fails" was too strong; the track-dependence it objected to was real.
+**Why 0.0008 and not a value strictly inside the measured range:** inside the range, only the minimum itself (0.00082) also clears every track, and there it clears with **exactly zero margin** — an offer at the quote is accepted only because the comparison is `<` rather than `≤`. 0.0008 keeps a real margin, survives a reseed that draws slightly lower, and is **the number `docs/demo-script.md` beat 1 already uses**, so the default policy and the demo script now state the same floor.
+**Files changed:** `src/a2a/seller-executor.ts` — the statement, plus a doc comment explaining the constraint (keep the floor at or below the cheapest track). `README.md`, `docs/bounty-coverage.md` — both recorded "a 0.5 ℏ floor and a 0.41 ℏ quote", now wrong; corrected to 0.4 vs 0.41 and reframed around the real range.
+**Verification:** the statement **re-parsed live through Groq** → `{"allowedLicenceTypes":["sync","sampling"],"minPricePerShareHbar":0.0008,"maxSharesPerLicence":5000,"forbiddenUseCases":["political-ad"]}`. Then `evaluateOffer` against an offer at `quotePrice` for **all 7 tracks × 5 share counts (100/250/500/1234/5000) — 35/35 accepted**. Then live, on the **cheapest** track (the one that used to fail): a fresh `npm run dev` reported the new policy, and an offer of exactly **0.41 ℏ** (= `quotePrice(1, 500)`) was accepted, settled `0.0.7162784@1785021328.929552906`, licence **#23**, certificate **#13**, capacity 8200 → 7700 and the ledger still reconciling (reserved 2300 = completed-rows sum 2300).
+**Known issues / things to watch for:**
+- **Reseeding the catalogue can silently break this.** The prices are PRNG draws inside `PRICE_PER_SHARE_MIN/MAX` in `seed-catalog.ts`; the floor is a sentence in `seller-executor.ts`. Nothing links them. If a future draw lands below 0.0008, that track will refuse offers at its own asking price, and only that track.
+- The **test suites are unaffected** — `test:e2e` and `test:rounds` both inject their own `POLICY` (still `0.001`) via `setPolicy` rather than parsing the default, and both pick tracks/prices that clear it. They were re-checked as green earlier this session; this change cannot reach them.
+- This edits `seller-executor.ts`, which is lane A's file under `PIVOT-PLAN.md` §4. Done on direct instruction, and the change is one string plus a comment.
+
 ### 2026-07-26 — Emre — Claude Code session (51) — track 1 capacity restored
 **Completed:** the loose end left by deleting licence rows #2/#3 — the capacity they had reserved is given back, so the catalogue reconciles with the ledger again.
 **Files changed:** none in `src/`; the change is one `UPDATE` against the local `catalogue.db` (gitignored). `PLAN.md` only.

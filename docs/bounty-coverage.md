@@ -68,4 +68,4 @@ Cut for time under a 12-hour budget. Named here rather than left for a judge to 
 
 | Behaviour | Effect |
 |---|---|
-| The policy floor and the track quote are two separate knobs | The floor comes from the rights holder's sentence (`minPricePerShareHbar × shares`); the charge is the track's own rate (`quotePrice`). With the shipped defaults a 5% licence has a 0.5 ℏ floor and a 0.41 ℏ quote, so an accepted offer reads "offers 0.5 ℏ … pays 0.41 ℏ". The buyer always pays the quote and the panel reports that; the two numbers simply are not the same number |
+| The policy floor and the track quote are two separate knobs | The floor comes from the rights holder's sentence (`minPricePerShareHbar × shares`); the charge is the track's own rate (`quotePrice`). The seeded catalogue runs **0.00082–0.00198 ℏ per share** and the default floor is **0.0008**, deliberately under the cheapest track, so an offer at any track's own asking price clears. On a 5% licence on the cheapest track: 0.4 ℏ floor, 0.41 ℏ quote. Reseed with different prices and the floor must move with them |

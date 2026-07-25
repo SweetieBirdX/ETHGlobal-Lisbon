@@ -102,11 +102,19 @@ export interface NegotiationResult {
  *
  * Overridable with `POLICY_STATEMENT` so a demo can change the rules without a
  * code change; Phase 8.2's form calls {@link setPolicy} instead.
+ *
+ * **The floor is set below the cheapest track on purpose.** The policy floor
+ * (`minPricePerShareHbar × shares`) and the price the endpoint charges
+ * (`quotePrice` — the track's own per-share rate × shares) are two independent
+ * numbers, and a floor above a track's rate means an offer at that track's own
+ * asking price is refused. The seeded catalogue runs 0.00082–0.00198 ℏ per
+ * share, so 0.0008 clears every track rather than only the expensive ones. Keep
+ * it at or below the cheapest track whenever the catalogue is reseeded.
  */
 export const DEFAULT_POLICY_STATEMENT =
   process.env.POLICY_STATEMENT ??
   "You can grant sync and sampling licences on my tracks to verified buyers, at least " +
-    "0.001 HBAR per share, up to 5000 shares per licence. Never license my music for " +
+    "0.0008 HBAR per share, up to 5000 shares per licence. Never license my music for " +
     "political advertising.";
 
 let cachedPolicy: LicencePolicy | null = null;
