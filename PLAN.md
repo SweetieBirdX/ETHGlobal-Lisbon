@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 1 — Hedera Base Layer (1.1 done; next: 1.2 balance query test script)
+**Active phase:** Phase 1 — Hedera Base Layer (1.1-1.2 done; next: 1.3 create HCS audit topic)
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -26,7 +26,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ### Phase 1 — Hedera Base Layer
 - [x] 1.1 Seller/buyer Hedera clients
-- [ ] 1.2 Balance query test script
+- [x] 1.2 Balance query test script
 - [ ] 1.3 Create HCS audit topic (→ write `HCS_AUDIT_TOPIC_ID` to `.env`!)
 - [ ] 1.4 HCS message submission helper function
 - [ ] 1.5 Simple HBAR transfer test
@@ -104,6 +104,19 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (7)
+**Completed:** Phase 1.2
+**Files changed:** `scripts/check-balance.ts` (new) — builds both clients via `createSellerClient()`/`createBuyerClient()`, reads each account id off `client.operatorAccountId`, runs `AccountBalanceQuery` and prints `balance.hbars`; closes both clients in a `finally` (without `client.close()` the process hangs on the SDK's open gRPC connections), and `main().catch()` exits 1 on failure.
+**Verification:** `npx tsc --noEmit` clean. `npx tsx scripts/check-balance.ts` against real testnet printed:
+```
+Hedera testnet balances
+-----------------------
+Seller agent (0.0.9696085): 1000 ℏ
+Buyer agent  (0.0.9697053): 1000 ℏ
+```
+**What the next person should do:** Phase 1.3 — create the HCS audit topic and **write the returned `HCS_AUDIT_TOPIC_ID` back into `.env`** (it is currently empty).
+**Known issues / things to watch for:** Imports use the `.js` extension (`../src/hedera/clients.js`) — required by NodeNext resolution even though the source is `.ts`; keep that pattern in every new script. The `.env`/`GROQ_API_KEY` and `@langchain/openai` items from session (6) are still open.
 
 ### 2026-07-25 — Emre — Claude Code session (6)
 **Completed:** Phase 1.1 (and the Phase 0 manual step is now done — `.env` is filled in with two real ECDSA testnet accounts)
