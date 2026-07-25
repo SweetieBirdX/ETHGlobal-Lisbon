@@ -76,6 +76,84 @@ export interface PayAndFetchOptions {
   maxAmountTinybar?: string;
   /** Called with each step, so a caller can show the protocol as it happens. */
   onStep?: (message: string) => void;
+  /** Give up on an unresponsive endpoint instead of hanging. */
+  timeoutMs?: number;
+}
+
+/** An endpoint that cannot be reached, or never answered. */
+export class EndpointUnreachableError extends Error {
+  constructor(url: string, cause: unknown) {
+    const timedOut =
+      cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError");
+    super(
+      timedOut
+        ? `Timed out waiting for ${url} — the endpoint accepted the connection but never answered.`
+        : `Cannot reach ${url} — is the x402 data server running? (${String(cause).slice(0, 120)})`,
+    );
+    this.name = "EndpointUnreachableError";
+    this.cause = cause;
+  }
+}
+
+/** The buyer does not hold enough HBAR to settle the quoted price. */
+export class InsufficientBalanceError extends Error {
+  constructor(
+    readonly accountId: string,
+    readonly requiredTinybar: string,
+    readonly availableTinybar: string,
+  ) {
+    super(
+      `Account ${accountId} holds ${Hbar.fromTinybars(availableTinybar).toString()} but the endpoint asks ` +
+        `${Hbar.fromTinybars(requiredTinybar).toString()} — fund the account at https://portal.hedera.com/dashboard.`,
+    );
+    this.name = "InsufficientBalanceError";
+  }
+}
+
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+/** `fetch` that fails with a diagnosable error instead of a bare TypeError. */
+async function fetchOrThrow(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    throw new EndpointUnreachableError(url, error);
+  }
+}
+
+/**
+ * Checks the buyer can actually cover the quote before signing anything.
+ *
+ * Without this, an underfunded agent produces a signature the network rejects,
+ * and the failure surfaces as an opaque facilitator error rather than the one
+ * thing the operator needs to know.
+ */
+export async function assertSufficientBalance(
+  accountId: string,
+  requiredTinybar: string,
+): Promise<void> {
+  let availableTinybar: string;
+  try {
+    const response = await fetch(
+      `https://testnet.mirrornode.hedera.com/api/v1/accounts/${accountId}`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+    if (!response.ok) return; // Mirror node trouble is not the buyer's problem.
+    const body = (await response.json()) as { balance?: { balance?: number } };
+    if (body.balance?.balance === undefined) return;
+    availableTinybar = String(body.balance.balance);
+  } catch {
+    // A balance check that cannot run must not block a payment that would work.
+    return;
+  }
+
+  if (BigInt(availableTinybar) < BigInt(requiredTinybar)) {
+    throw new InsufficientBalanceError(accountId, requiredTinybar, availableTinybar);
+  }
 }
 
 /**
@@ -88,10 +166,11 @@ export async function payAndFetch<T = unknown>(
   options: PayAndFetchOptions = {},
 ): Promise<PayAndFetchResult<T>> {
   const log = options.onStep ?? (() => {});
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   // 1. Unpaid request — expected to be rejected with 402.
   log(`-> GET ${url}`);
-  const unpaid = await fetch(url);
+  const unpaid = await fetchOrThrow(url, {}, timeoutMs);
   log(`<- HTTP ${unpaid.status}`);
 
   if (unpaid.status !== 402) {
@@ -135,18 +214,28 @@ export async function payAndFetch<T = unknown>(
     }
   }
 
-  // 3. Sign a payment matching those requirements.
+  // 3. Sign a payment matching those requirements — but only if it can be paid.
+  const buyerAccountId = requireEnv("BUYER_ACCOUNT_ID");
+  const dearest = quoted.reduce(
+    (max, requirement) =>
+      BigInt(requirement.amountTinybar) > BigInt(max) ? requirement.amountTinybar : max,
+    "0",
+  );
+  await assertSufficientBalance(buyerAccountId, dearest);
+
   const client = new x402Client().register(
     "hedera:*",
     new ExactHederaScheme(createBuyerSigner()),
   );
   const payload = await client.createPaymentPayload(paymentRequired);
-  log(`   signed by ${requireEnv("BUYER_ACCOUNT_ID")} — retrying with payment`);
+  log(`   signed by ${buyerAccountId} — retrying with payment`);
 
   // 4. Same request, now carrying the signed payment.
-  const paid = await fetch(url, {
-    headers: { "payment-signature": encodePaymentSignatureHeader(payload) },
-  });
+  const paid = await fetchOrThrow(
+    url,
+    { headers: { "payment-signature": encodePaymentSignatureHeader(payload) } },
+    timeoutMs,
+  );
   log(`-> GET ${url} (with payment-signature)`);
   log(`<- HTTP ${paid.status}`);
 

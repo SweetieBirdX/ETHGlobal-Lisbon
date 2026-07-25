@@ -51,7 +51,9 @@ export type DeclineReason =
   | "offer_incomplete"
   | "category_mismatch"
   | "price_too_low"
-  | "cohort_too_small";
+  | "cohort_too_small"
+  /** Something failed on the seller's side; the buyer is not at fault. */
+  | "internal_error";
 
 /**
  * Everything the buyer agent needs to pay and collect, sent with an
@@ -110,7 +112,18 @@ let cachedPolicy: DataPolicy | null = null;
  * once, so it is interpreted once.
  */
 export async function getPolicy(): Promise<DataPolicy> {
-  cachedPolicy ??= await parsePolicy(DEFAULT_POLICY_STATEMENT);
+  if (cachedPolicy) return cachedPolicy;
+
+  try {
+    cachedPolicy = await parsePolicy(DEFAULT_POLICY_STATEMENT);
+  } catch (error) {
+    // If the owner's instructions cannot be interpreted, the safe reading is
+    // "sell nothing" — never "sell anything".
+    throw new Error(
+      `Could not interpret the owner's policy, so no sale can be authorised: ${String(error).slice(0, 160)}`,
+    );
+  }
+
   return cachedPolicy;
 }
 
@@ -353,7 +366,18 @@ export async function verifyBuyerIdentity(
 
   // Returns the zero address for an id that was never minted, rather than
   // reverting the way ownerOf does.
-  const wallet: string = await identityRegistry.getAgentWallet!(agentId);
+  let wallet: string;
+  try {
+    wallet = await identityRegistry.getAgentWallet!(agentId);
+  } catch (error) {
+    // The registry being unreachable is not evidence the buyer is honest, so
+    // this fails closed — but it says so, rather than blaming the buyer.
+    return {
+      verified: false,
+      reason: `the ERC-8004 registry could not be reached, so agent ${agentId} cannot be verified right now (${String(error).slice(0, 100)})`,
+    };
+  }
+
   if (wallet === ZeroAddress) {
     return {
       verified: false,
@@ -404,6 +428,26 @@ export async function verifyBuyerIdentity(
 
 export class SellerExecutor implements AgentExecutor {
   async execute(
+    requestContext: RequestContext,
+    eventBus: ExecutionEventBus,
+  ): Promise<void> {
+    // A negotiation must always end in an answer. Anything unexpected becomes a
+    // decline the buyer can read, never a hung request or a stack trace.
+    try {
+      await this.negotiate(requestContext, eventBus);
+    } catch (error) {
+      console.error("[negotiation] unexpected failure:", error);
+      this.publishReply(requestContext, eventBus, {
+        decision: "decline",
+        reason: "internal_error",
+        reply:
+          "I could not complete this negotiation because of a problem on my side. " +
+          "Nothing has been charged. Please try again shortly.",
+      });
+    }
+  }
+
+  private async negotiate(
     requestContext: RequestContext,
     eventBus: ExecutionEventBus,
   ): Promise<void> {

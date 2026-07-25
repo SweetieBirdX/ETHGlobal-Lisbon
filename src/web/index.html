@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Personal Fitness Data Marketplace</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0c0f14;
+        --panel: #141922;
+        --panel-2: #1b2130;
+        --line: #262e3d;
+        --text: #e6ebf2;
+        --muted: #8b97a8;
+        --accent: #4ade80;
+        --accent-dim: #1c3a2a;
+        --danger: #f87171;
+        --danger-dim: #3a1f22;
+        --warn: #fbbf24;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      header {
+        border-bottom: 1px solid var(--line);
+        padding: 20px 24px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: baseline;
+        justify-content: space-between;
+      }
+      h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+      h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 0 0 14px;
+        font-weight: 600;
+      }
+      .sub { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+      .agents { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
+      .agents b { color: var(--text); font-weight: 600; }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+        gap: 18px;
+        padding: 20px 24px 40px;
+        align-items: start;
+      }
+      @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 18px;
+      }
+      .col { display: flex; flex-direction: column; gap: 18px; }
+
+      label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+      textarea, input, select {
+        width: 100%;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        color: var(--text);
+        border-radius: 7px;
+        padding: 10px 12px;
+        font: inherit;
+        resize: vertical;
+      }
+      textarea:focus, input:focus, select:focus { outline: 2px solid #2f4a6b; border-color: transparent; }
+      button {
+        background: var(--accent);
+        color: #08140d;
+        border: 0;
+        border-radius: 7px;
+        padding: 10px 16px;
+        font: 600 14px/1 inherit;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+      .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+      .row > * { flex: 1 1 120px; }
+      .actions { display: flex; gap: 10px; margin-top: 14px; }
+
+      .parsed {
+        margin-top: 14px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 12px;
+        font: 12px/1.6 ui-monospace, "Cascadia Code", Consolas, monospace;
+        color: var(--muted);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .log {
+        font: 12.5px/1.7 ui-monospace, "Cascadia Code", Consolas, monospace;
+        max-height: 460px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .entry {
+        display: grid;
+        grid-template-columns: 62px 1fr;
+        gap: 10px;
+        padding: 7px 10px;
+        border-radius: 6px;
+        background: var(--panel-2);
+        border-left: 2px solid var(--line);
+      }
+      .entry time { color: var(--muted); }
+      .entry.accept { border-left-color: var(--accent); }
+      .entry.decline { border-left-color: var(--danger); }
+      .entry.payment { border-left-color: var(--warn); }
+      .entry .who { color: var(--muted); }
+      .empty { color: var(--muted); font-size: 13px; padding: 18px 0; text-align: center; }
+
+      .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+      .stat {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px;
+      }
+      .stat .value { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; }
+      .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+      .stat.earn .value { color: var(--accent); }
+
+      table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+      th {
+        text-align: left;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        font-weight: 600;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      td { padding: 9px 10px; border-bottom: 1px solid var(--line); }
+      tr:last-child td { border-bottom: 0; }
+      .pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .pill.completed { background: var(--accent-dim); color: var(--accent); }
+      .pill.declined { background: var(--danger-dim); color: var(--danger); }
+      .pill.accepted { background: #2a2f1f; color: var(--warn); }
+      a { color: #7dd3fc; }
+      .status { font-size: 12px; color: var(--muted); min-height: 18px; }
+      .status.error { color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Personal Fitness Data Marketplace</h1>
+        <p class="sub">
+          Your agent negotiates on your behalf. You set the rules once — no transaction asks for your approval.
+        </p>
+      </div>
+      <div class="agents">
+        <span>seller <b id="seller-agent">—</b></span>
+        <span>buyer <b id="buyer-agent">—</b></span>
+        <span>network <b>hedera:testnet</b></span>
+      </div>
+    </header>
+
+    <main>
+      <div class="col">
+        <!-- 1. Policy -->
+        <section class="panel">
+          <h2>Your policy</h2>
+          <label for="policy">Describe what you are willing to sell, in your own words</label>
+          <textarea id="policy" rows="5" placeholder="e.g. You can sell aggregated statistics from my running and cycling data…"></textarea>
+          <div class="actions">
+            <button id="save-policy">Save policy</button>
+            <button id="reset-policy" class="secondary">Reset</button>
+          </div>
+          <p class="status" id="policy-status"></p>
+          <div class="parsed" id="policy-parsed">No policy loaded yet.</div>
+        </section>
+
+        <!-- 3. Earnings -->
+        <section class="panel">
+          <h2>Earnings</h2>
+          <div class="stats">
+            <div class="stat earn"><div class="value" id="stat-earned">0 ℏ</div><div class="label">Earned</div></div>
+            <div class="stat"><div class="value" id="stat-sales">0</div><div class="label">Sales</div></div>
+            <div class="stat"><div class="value" id="stat-declined">0</div><div class="label">Declined</div></div>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Buyer</th><th>Cohort</th><th>Price</th><th>Status</th></tr>
+            </thead>
+            <tbody id="sales-body">
+              <tr><td colspan="4" class="empty">No sales yet.</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <!-- 2. Negotiation log -->
+      <section class="panel">
+        <h2>Live negotiation</h2>
+        <div class="row">
+          <div>
+            <label for="category">Buyer wants</label>
+            <select id="category">
+              <option value="running">running</option>
+              <option value="cycling">cycling</option>
+              <option value="swimming">swimming</option>
+              <option value="strength">strength</option>
+            </select>
+          </div>
+          <div>
+            <label for="price">Offers (ℏ)</label>
+            <input id="price" type="number" step="0.1" min="0" value="0.5" />
+          </div>
+          <div style="flex: 0 0 auto">
+            <button id="run">Send offer</button>
+          </div>
+        </div>
+        <p class="status" id="run-status"></p>
+        <div class="log" id="log">
+          <p class="empty">Nothing yet — send an offer to watch the two agents negotiate.</p>
+        </div>
+      </section>
+    </main>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+
+      const state = { entries: [] };
+
+      function time() {
+        return new Date().toLocaleTimeString([], { hour12: false });
+      }
+
+      function addEntry(who, text, kind = "") {
+        state.entries.push({ who, text, kind, at: time() });
+        renderLog();
+      }
+      window.addEntry = addEntry;
+
+      function renderLog() {
+        const log = $("log");
+        if (state.entries.length === 0) {
+          log.innerHTML = '<p class="empty">Nothing yet — send an offer to watch the two agents negotiate.</p>';
+          return;
+        }
+        log.innerHTML = state.entries
+          .map(
+            (e) =>
+              `<div class="entry ${e.kind}"><time>${e.at}</time><div><span class="who">${e.who}</span> ${e.text}</div></div>`,
+          )
+          .join("");
+        log.scrollTop = log.scrollHeight;
+      }
+
+      async function loadStatus() {
+        try {
+          const res = await fetch("/api/status");
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          $("seller-agent").textContent = `#${data.sellerAgentId}`;
+          $("buyer-agent").textContent = `#${data.buyerAgentId}`;
+          if (data.policyStatement) $("policy").value = data.policyStatement;
+          if (data.policy) $("policy-parsed").textContent = JSON.stringify(data.policy, null, 2);
+        } catch (error) {
+          $("policy-status").textContent = `Backend not reachable: ${error.message}`;
+          $("policy-status").className = "status error";
+        }
+      }
+
+      async function loadEarnings() {
+        try {
+          const res = await fetch("/api/earnings");
+          if (!res.ok) return;
+          const data = await res.json();
+          $("stat-earned").textContent = `${data.totalEarnedHbar ?? 0} ℏ`;
+          $("stat-sales").textContent = data.completedCount ?? 0;
+          $("stat-declined").textContent = data.declinedCount ?? 0;
+
+          const body = $("sales-body");
+          if (!data.sales?.length) {
+            body.innerHTML = '<tr><td colspan="4" class="empty">No sales yet.</td></tr>';
+            return;
+          }
+          body.innerHTML = data.sales
+            .map(
+              (s) =>
+                `<tr><td>#${s.buyerAgentId}</td><td>${s.criteria}</td><td>${s.price} ℏ</td>` +
+                `<td><span class="pill ${s.status}">${s.status}</span></td></tr>`,
+            )
+            .join("");
+        } catch {
+          /* earnings are non-critical; leave the panel as-is */
+        }
+      }
+
+      function setStatus(text, isError = false) {
+        const el = $("policy-status");
+        el.textContent = text;
+        el.className = isError ? "status error" : "status";
+      }
+
+      async function savePolicy() {
+        const statement = $("policy").value.trim();
+        const button = $("save-policy");
+
+        if (!statement) {
+          setStatus("Describe what you are willing to sell first.", true);
+          return;
+        }
+
+        button.disabled = true;
+        setStatus("Interpreting your policy…");
+
+        try {
+          const res = await fetch("/api/policy", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ statement }),
+          });
+          const data = await res.json();
+
+          if (!res.ok) {
+            // The previous policy stays in force — say so, so nobody assumes
+            // the agent is now unconstrained.
+            setStatus(`${data.error} Your previous policy is still in force.`, true);
+            return;
+          }
+
+          $("policy-parsed").textContent = JSON.stringify(data.policy, null, 2);
+          const allowed = data.policy.allowedCategories;
+          setStatus(
+            allowed.length
+              ? `Saved — your agent will sell ${allowed.join(" and ")} data at ${data.policy.minPrice} ℏ or more, and refuse everything else.`
+              : "Saved — your agent will not sell anything.",
+          );
+          addEntry("policy", `updated: ${allowed.join(", ") || "nothing permitted"}, min ${data.policy.minPrice} ℏ`);
+        } catch (error) {
+          setStatus(`Could not reach the backend: ${error.message}`, true);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      $("save-policy").addEventListener("click", savePolicy);
+
+      // Ctrl/Cmd+Enter saves, so the demo does not need a mouse.
+      $("policy").addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") savePolicy();
+      });
+
+      $("reset-policy").addEventListener("click", () => {
+        setStatus("");
+        loadStatus();
+      });
+
+      $("run").addEventListener("click", () => {
+        const category = $("category").value;
+        const price = $("price").value;
+        addEntry("buyer →", `offers ${price} ℏ for ${category} cohort data`, "");
+        $("run-status").textContent = "Live negotiation arrives in step 8.3.";
+      });
+
+      loadStatus();
+      loadEarnings();
+    </script>
+  </body>
+</html>

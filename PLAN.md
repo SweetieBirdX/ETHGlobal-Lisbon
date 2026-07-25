@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 7 — Full Integration (7.1-7.3 done). Next: 7.4 — full end-to-end test script.
+**Active phase:** Phase 8 — Frontend (8.1-8.2 done). Next: 8.3 — live negotiation log (SSE).
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -68,12 +68,12 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 7.1 Accept → x402 routing
 - [x] 7.2 Buyer agent autonomous payment trigger
 - [x] 7.3 Post-payment audit log + reputation chain
-- [ ] 7.4 Full end-to-end test script
-- [ ] 7.5 Error handling and edge cases
+- [x] 7.4 Full end-to-end test script
+- [x] 7.5 Error handling and edge cases
 
 ### Phase 8 — Frontend
-- [ ] 8.1 Frontend skeleton
-- [ ] 8.2 Policy input form
+- [x] 8.1 Frontend skeleton
+- [x] 8.2 Policy input form
 - [ ] 8.3 Live negotiation log (SSE)
 - [ ] 8.4 Earnings panel
 - [ ] 8.5 HCS audit trail view
@@ -104,6 +104,56 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (34)
+**Completed:** Phase 8.2
+**Files changed:** `src/web/api.ts` (new) — `createApiRouter()` with `GET /status`, **`POST /policy`** (`parsePolicy` → `setPolicy`, returns the parsed JSON) and `GET /earnings`; the routes moved out of `server.ts`, which now just serves the page and mounts the router. `src/web/index.html` — the form posts, renders the parsed policy, reports errors, and supports Ctrl/Cmd+Enter. `src/dev-server.ts` (**new**) — runs seller + x402 + panel in one process. `package.json` — `npm run dev`.
+**Why `dev-server.ts` was necessary:** the policy is held in memory by the seller agent (`setPolicy`), so a panel running in its **own process cannot change what the agent does** — it would only be talking to itself. Started separately, saving a policy appeared to work and had no effect. `npm run dev` puts all three in one process so a saved policy is genuinely in force.
+**Verification:** `npx tsc --noEmit` clean, inline script re-parsed. **8/8** against the running stack, proving the form changes agent behaviour rather than just echoing JSON: running @0.5 accepted → saved *"Only sell my swimming data, and never for less than 2 HBAR"* → the **same offer now refused** (`category_mismatch`, "Permitted: swimming"), swimming @0.5 refused (`price_too_low`, minimum 2 ℏ), swimming @2.5 accepted. An empty policy is rejected with 400 **and the previous policy stays in force** — verified by a subsequent offer still being accepted. Demo policy restored at the end.
+**What the next person should do:** Phase 8.3 — the live negotiation log over SSE. `addEntry(who, text, kind)` already exists in the page with `accept` / `decline` / `payment` styling, and the "Send offer" button is still a placeholder.
+**Known issues / things to watch for:**
+- **A failed parse never disarms the agent.** `setPolicy` is only called after `parsePolicy` succeeds, so a Groq outage leaves the previous rules in force and the UI says so explicitly. The alternative — clearing the policy on error — would mean an outage silently changed what the agent sells.
+- The policy lives **in memory**: restarting `npm run dev` reverts to `DEFAULT_POLICY_STATEMENT`. Fine for a demo, but a saved policy does not survive a restart.
+- `POST /api/policy` costs one Groq call and takes a second or two; the button disables itself while it runs.
+- The first POST after boot can race server startup and return an empty body — hit it again. Only affects the first request.
+- **Run the demo with `npm run dev`, not three separate terminals**, or the policy form will silently do nothing to the agent.
+
+### 2026-07-25 — Emre — Claude Code session (33)
+**Completed:** Phase 8.1
+**Files changed:** `src/web/index.html` (new) — single-file panel with the three sections: policy form, live negotiation log, earnings. `src/web/server.ts` (new) — Express app serving it plus `GET /api/status` (agent ids + the policy in force) and `GET /api/earnings` (totals and recent rows from the `queries` ledger); `createWebApp()` / `startWebServer()` with the same run-directly guard the other servers use. `package.json` — `npm run web`.
+**Decision — no Vite/React.** A single HTML file with vanilla JS needs no build step, no extra dependencies and no second dev server, and it is trivially servable from the Express stack that already exists. Phase 8 is first on the cut list in the emergency ordering, so the frontend should not be the thing that breaks the build.
+**Verification:** `npx tsc --noEmit` clean. Server started on **4100**: `/` → 200 (11,937 bytes), `/api/status` → `{"sellerAgentId":"103","buyerAgentId":"104","policy":{"allowedCategories":["running","cycling"],"minPrice":0.4,…}}`, `/api/earnings` → `{"totalEarnedHbar":1.5,"completedCount":3,…}` with the real rows behind it. The inline module script was extracted and syntax-checked separately, and the page was asserted to contain all three panels and both API paths.
+**What the next person should do:** Phase 8.2 — wire the policy form to a `POST /api/policy` that calls `parsePolicy` + `setPolicy`, and show the parsed JSON back. The form and the "arrives in step 8.2" placeholder are already in place.
+**Known issues / things to watch for:**
+- **The panel reads real state, not fixtures** — agent ids from `agent-ids.json`, the policy through `getPolicy()`, earnings from the `queries` table. `/api/status` therefore triggers a **Groq call** on first hit if the policy has not been parsed yet.
+- `/api/earnings` currently shows a leftover row from the error-case suite: `price 1000000, status accepted` (the "absurdly generous offer" case). It is genuine state, not a display bug — clear it with `DELETE FROM queries WHERE status='accepted'` before filming if it looks odd.
+- The buttons are wired to placeholders that say which step fills them in (8.2 policy save, 8.3 live log). Nothing pretends to work.
+- The first version had `export function addEntry` inside an inline `<script type="module">`, which is a syntax error in browsers and would have blanked the page. Fixed and verified by parsing the extracted script.
+- Ports now in use: **4000** seller A2A, **4021** x402 data, **4100** web panel.
+
+### 2026-07-25 — Emre — Claude Code session (32)
+**Completed:** Phase 7.5 — **Phase 7 is done**
+**Files changed:** `src/x402/pay.ts` — `EndpointUnreachableError` and `InsufficientBalanceError`; every `fetch` now goes through `fetchOrThrow` with an `AbortSignal.timeout` (default 60 s, overridable); `assertSufficientBalance()` checks the buyer's balance against the quote **before signing**. `src/a2a/seller-executor.ts` — `execute()` wraps the negotiation so any unexpected failure becomes a readable `internal_error` decline instead of a hung request; a registry outage now yields "cannot be verified right now" rather than "not registered"; `getPolicy()` failure says no sale can be authorised. `scripts/test-error-cases.ts` (new). `package.json` — `npm run test:e2e` and `npm run test:errors`.
+**Verification:** `npx tsc --noEmit` clean. `scripts/test-error-cases.ts` → **17/17**, spending no HBAR (every case fails before a signature). Covers: unreachable x402 endpoint and unreachable seller agent; a **real timeout** against a black-hole server that accepts connections and never answers; insufficient balance caught pre-signature, while an affordable payment is *not* blocked and an unknown account does not crash the check; five bad agent ids (never minted, non-numeric, empty, negative, and **103 — registered but unattested**); and live-seller edge cases (forged agentId → no payment instruction, negative price → `price_too_low`, non-numeric price → `offer_incomplete`, 1-person cohort → `cohort_too_small`). `scripts/full-e2e-test.ts` re-run afterwards: still **17/17**, so the new pre-flight checks did not break the happy path.
+**What the next person should do:** Phase 8.1 — frontend skeleton.
+**Known issues / things to watch for:**
+- **Failure modes fail closed.** A registry outage declines rather than trusting the buyer; an unparseable policy authorises nothing. The one deliberate exception is `assertSufficientBalance`: if the *mirror node* cannot be reached it returns quietly rather than blocking a payment that would have worked — a diagnostic must not become a new point of failure.
+- The balance pre-flight uses the mirror node, which lags consensus slightly. It is a guard against the obvious case (empty account), not a race-free reservation.
+- **`negative price is refused` currently lands as `price_too_low`, not a validation error.** It reads fine ("you offered -5 HBAR and the minimum is 0.4"), but if the policy minimum were ever 0 a negative offer would pass. Worth an explicit `priceHbar >= 0` guard if there is time.
+- An absurd offer (1,000,000 ℏ) is **accepted** — the policy has a floor, not a ceiling, and the endpoint still charges its own 0.5 ℏ. Consistent with the 0.4-vs-0.5 mismatch already logged in session 28.
+- `scripts/test-error-cases.ts` starts a black-hole server on port 4997 and the seller on 4000; both are closed in `finally`, but a crash mid-run can leave them bound.
+
+### 2026-07-25 — Emre — Claude Code session (31)
+**Completed:** Phase 7.4 — **`npx tsx scripts/full-e2e-test.ts` proves the whole system in one command**
+**Files changed:** `scripts/full-e2e-test.ts` (new). `src/x402/server.ts` — now exports `startX402Server()` and only self-starts when run directly (`process.argv[1] === fileURLToPath(import.meta.url)`), matching `seller-server.ts`; it previously called `app.listen` at module scope, so importing it started a server as a side effect and no test could own the lifecycle.
+**Verification:** `npx tsc --noEmit` clean. One real run: **17/17 checks passed**, exit 0, both ports released afterwards. Scenario 1 (running @ 0.5 ℏ, permitted): accepted → 402 → signed → 200 with `{"participantCount":3,"avgSessionCount":5.3,"avgPerformanceScore":64.3,"trend":"down"}`, payment `0.0.7162784@1784958126.896929667`, then HCS `seq 4 → 5`, feedback `count 2 → 3`, `queries` row `completed` with the right tx and buyer. Scenario 2 (swimming @ 0.9 ℏ, forbidden): declined with `category_mismatch`, **no payment attempted, no payment instruction issued, and no new HCS entry, feedback or query row**.
+**What the next person should do:** Phase 7.5 — error handling and edge cases. Candidates already known: an unfunded buyer, the facilitator being unreachable, a Groq outage while parsing the policy, and a second payment against an already-completed `queryId`.
+**Known issues / things to watch for:**
+- **The script parses the policy itself** (`parsePolicy` → `setPolicy`) rather than relying on the executor's cached default, so the run demonstrates the natural-language path rather than assuming it.
+- It waits **30 s** after the purchase before asserting on HCS and reputation. That is the fire-and-forget chain from 7.3, not slack — asserting immediately fails.
+- **Each run costs a real 0.5 ℏ** and appends one HCS message and one feedback entry, so the baseline numbers move every time. The test reads the baseline first and asserts on the *delta*, so it stays correct across runs.
+- The failure scenario asserts on **absence** (no writes anywhere), which is the more valuable half: it is what proves a refusal is free and leaves no trace.
+- Both servers are started in-process and closed in a `finally`, so a failing assertion still releases ports 4000 and 4021.
 
 ### 2026-07-25 — Emre — Claude Code session (30)
 **Completed:** Phase 7.3 — **the full loop now closes on-chain: negotiate → pay → audit → reputation → ledger**

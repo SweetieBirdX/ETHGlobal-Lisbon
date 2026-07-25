@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { fileURLToPath } from "node:url";
 import express, { type Response } from "express";
 import { paymentMiddleware } from "@x402/express";
 import { decodePaymentResponseHeader } from "@x402/core/http";
@@ -180,12 +181,19 @@ app.get(COHORT_INSIGHT_PATH, async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`x402 data server listening on http://localhost:${PORT}`);
-  console.log(`  facilitator: ${facilitatorUrl}`);
-  console.log(`  pay to:      ${payToAccount} (${NETWORK})`);
-  console.log(`  GET /catalog              (free)`);
-  console.log(
-    `  GET ${COHORT_INSIGHT_PATH} (${COHORT_INSIGHT_PRICE_HBAR} HBAR = ${COHORT_INSIGHT_PRICE_TINYBAR} tinybar, asset ${HBAR_ASSET_ID})`,
-  );
-});
+export function startX402Server(port: number = PORT) {
+  return app.listen(port, () => {
+    console.log(`x402 data server listening on http://localhost:${port}`);
+    console.log(`  facilitator: ${facilitatorUrl}`);
+    console.log(`  pay to:      ${payToAccount} (${NETWORK})`);
+    console.log(`  GET /catalog              (free)`);
+    console.log(
+      `  GET ${COHORT_INSIGHT_PATH} (${COHORT_INSIGHT_PRICE_HBAR} HBAR = ${COHORT_INSIGHT_PRICE_TINYBAR} tinybar, asset ${HBAR_ASSET_ID})`,
+    );
+  });
+}
+
+// Only start listening when run directly, so a test can own the lifecycle.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  startX402Server();
+}
