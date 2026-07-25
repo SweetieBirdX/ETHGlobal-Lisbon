@@ -95,9 +95,24 @@ Full list in `.env.example`. The critical ones: `SELLER_ACCOUNT_ID` / `SELLER_PR
 
 ## Working Rules (for every Claude session)
 
+**Rule 0 — sync with the remote before touching anything, and again before every commit.**
+Two people work this repo in parallel, so the working copy goes stale fast. Both moments are
+mandatory, not one:
+
+```bash
+# before you start editing, and again immediately before you commit
+git fetch --quiet && git status -sb          # "[behind N]" means STOP and pull first
+git pull --rebase                            # only if behind
+```
+
+If `git status -sb` reports `[behind N]`, **pull before doing anything else** — never edit or
+commit on top of a stale copy. If the pull brings in changes to a file you were about to edit,
+re-read that file before continuing; your mental model of it is out of date. When a rebase
+conflicts, resolve it before writing new code, never alongside it.
+
 1. Before starting work, read `PLAN.md` — see which phase we're on and the last handoff note.
 2. Don't skip ahead in `prompt-list.md`. Don't move to the next phase before the current one is done (there's a dependency chain).
-3. Commit immediately after finishing each atomic step — commit message format is given under every prompt in `prompt-list.md` (`feat:`, `test:`, `fix:`, `docs:`, `chore:` prefixes).
+3. Commit immediately after finishing each atomic step — commit message format is given under every prompt in `prompt-list.md` (`feat:`, `test:`, `fix:`, `docs:`, `chore:` prefixes). **Re-run the Rule 0 check first** (someone may have pushed while you were working), and push straight after committing so the other lane is never more than one step behind. If the step also changes `package.json`, commit that file **alone and first** — see `PIVOT-PROMPTS.md` Rule 5.
 4. If you get stuck on a step, don't just stop — commit a simplified (mock/fixed-value) version anyway, and note in `PLAN.md` "simplified, needs improvement."
 5. When you finish your work (end of session or end of phase), **you must update `PLAN.md`**: check off the completed phase/prompt, add a handoff note (which files changed, what the next person/session should do, known issues).
 6. Never share real private keys or `.env` contents in code blocks or commit messages.
