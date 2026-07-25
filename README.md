@@ -68,6 +68,7 @@ Because nobody is watching each deal, trust has to be structural: the buyer prov
 | **Hedera Agent Kit** | `src/hedera/agentkit.ts` | `HederaLangchainToolkit` in `AgentMode.AUTONOMOUS` — the agent signs and submits with the operator key instead of returning bytes for a human to approve. `allCorePlugins` exposes 43 tools; the agent picks the one it needs. |
 | **HCS** (Consensus Service) | `src/hedera/audit.ts`, `HcsAuditTrailHook` | Every completed exchange is written to a single audit topic as JSON. The Agent Kit's own hook also logs tool executions to the same topic, so the trail covers both what the agent *did* and what it *sold*. |
 | **x402** | `src/x402/server.ts`, `src/x402/pay.ts` | The data endpoint is payment-gated: an unpaid `GET` returns **402** with the terms in a header; the buyer agent signs a Hedera transfer and retries; the same request then returns the data. A request must also name the negotiation that authorised it, so the endpoint cannot be used to buy around the policy. Facilitator: blocky402. Asset: native HBAR (`0.0.0`). |
+| **HTS** (Token Service) | `src/hedera/receipt.ts` | After every completed sale, one NFT from the "Data Access Receipt" collection is minted **to the account that paid** (read from the x402 settlement, not from config). Its on-chain metadata — capped by Hedera at 100 bytes, hence a truncated hash — references the negotiation id, the HCS audit entry and the compliance attestation, so the buyer holds one token linking all three proofs. The seller is treasury and sole supply key: only the data owner's agent can issue receipts. |
 | **A2A** (`@a2a-js/sdk`) | `src/a2a/` | The seller publishes an AgentCard at `/.well-known/agent-card.json`; the buyer discovers the endpoint from it and negotiates over JSON-RPC. The buyer is given only a base URL — everything else comes from the card. |
 | **ERC-8004** | `src/erc8004/` | Identity: both agents hold registry NFTs whose `tokenURI` is their registration file. Reputation: after each sale the seller publishes feedback citing the payment transaction, so the rating is checkable rather than asserted. Compliance: attested per negotiation — recorded on HCS rather than the ValidationRegistry, for the reason below. |
 
@@ -122,12 +123,14 @@ Fill in `.env`:
 | `X402_PAY_TO_ACCOUNT` | same as `SELLER_ACCOUNT_ID` |
 | `DATA_ENCRYPTION_KEY` | any passphrase; it never leaves your machine |
 | `ERC8004_*` | already filled in — fixed addresses |
+| `HCS_AUDIT_TOPIC_ID` / `HTS_RECEIPT_TOKEN_ID` | printed by the two create-scripts below |
 
 Then, in order:
 
 ```bash
 npx tsx scripts/check-balance.ts        # confirm both accounts are funded
 npx tsx scripts/create-audit-topic.ts   # → paste HCS_AUDIT_TOPIC_ID into .env
+npx tsx scripts/create-receipt-token.ts # → paste HTS_RECEIPT_TOKEN_ID into .env (also associates the buyer)
 npx tsx scripts/register-agents.ts      # mints both ERC-8004 identities → agent-ids.json
 npx tsx scripts/seed-data.ts            # 12 encrypted fitness records
 npm run dev                             # → http://localhost:4100
@@ -146,6 +149,7 @@ npm test               # = test:e2e — needs a funded account, so it costs 0.5 
 npm run test:e2e       # full flow, both an accepted and a refused offer  (costs 0.5 ℏ)
 npm run test:errors    # network failure, timeout, insufficient balance, bad agent ids  (HCS fees only)
 npm run test:validation # compliance attestations land on Hedera and read back  (HCS fees only)
+npm run test:receipt   # receipt NFT lands in the buyer's account, replay mints nothing  (costs 0.5 ℏ)
 npm run test:binding   # the endpoint serves only what was negotiated, once  (costs 0.5 ℏ)
 npm run verify:phase7  # runs the full flow twice, then every failure mode  (costs 1 ℏ)
 ```
@@ -203,6 +207,7 @@ What is genuinely wired up, what stands in for something, and the command that p
 | Native HBAR micropayment, settled on testnet | real | facilitator blocky402, asset `0.0.0` | HashScan tx in every run |
 | Policy enforced at the point of payment | real | `requireAcceptedNegotiation` | `npm run test:binding` |
 | Hedera Agent Kit, `AgentMode.AUTONOMOUS` | real | `src/hedera/agentkit.ts` | `scripts/test-agent-kit.ts` |
+| HTS receipt NFT per sale, to the payer | real | `src/hedera/receipt.ts` | `npm run test:receipt` (mirror node confirms the buyer holds it; replay mints nothing) |
 | HCS audit trail | real | `src/hedera/audit.ts` | panel's audit view, read from the mirror node |
 | ERC-8004 IdentityRegistry | real on-chain calls | `src/erc8004/contracts.ts` | agent ids 103/104, `scripts/register-agents.ts` |
 | ERC-8004 ReputationRegistry | real on-chain calls | `src/erc8004/feedback.ts` | `npm run verify:phase7` (count increases per sale) |
@@ -222,6 +227,7 @@ Two rows are deliberately not green, and both are named rather than buried: ther
 - `trend` compares a cohort against the whole population — there is no time series in the data, so it is not change over time.
 - The seeded population is synthetic and generated from a fixed seed, so the demo numbers are reproducible.
 - The endpoint price is fixed at 0.5 ℏ while the policy minimum is a floor — an accepted offer below the endpoint price would be quoted the endpoint's price, and the buyer's own guard refuses to overpay.
+- The receipt NFT goes to whichever account settled the payment, but a recipient must have **associated** with the collection first — `create-receipt-token.ts` associates the demo buyer; any additional buyer would need its own association before it could receive receipts. Sales from before the collection existed show `—` in the panel's Receipt column.
 
 ## License
 

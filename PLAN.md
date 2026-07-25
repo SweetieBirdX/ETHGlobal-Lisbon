@@ -12,6 +12,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
+> **Session 43 — HTS:** every completed sale mints a receipt NFT (collection `0.0.9743962`) to the paying account, metadata linking payment + HCS entry + attestation. `npm run test:receipt`, 10/10. New setup step: `scripts/create-receipt-token.ts`.
+>
 > **Session 42 — read this before touching ERC-8004:** the **ValidationRegistry has no deployment on any chain** (spec section still under revision with the TEE community), so there is no address to call and none to find. The compliance attestation is recorded on **HCS** instead, using the registry's field names — `npm run test:validation`, 22/22. Consequence: the audit topic now carries attestations as well as sales, so **never assert on it by sequence delta** — use `countTopicEvents(event)` from `src/hedera/mirror.ts`.
 
 > **Session 40:** Phase 7 re-verified end to end with `npm run verify:phase7` — **24/24**, proving the flow is repeatable (every counter increases by exactly one per run) and every failure mode is survivable. `scripts/full-e2e-test.ts` had been failing 16/17 since session 36 and is fixed, now **18/18**.
@@ -110,6 +112,20 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (43)
+**Completed:** HTS integration — every completed sale now mints one **receipt NFT to the account that paid**, tying the payment, the HCS audit entry and the compliance attestation to a single token in the buyer's wallet.
+**Files changed:** `src/hedera/receipt.ts` (**new**) — `mintReceipt()`: mint (treasury) → transfer (payer), compact metadata. `scripts/create-receipt-token.ts` (**new**) — one-time collection create + buyer association, guarded (refuses if `HTS_RECEIPT_TOKEN_ID` set, unless `FORCE=1` — the guard `create-audit-topic.ts` never got). `src/data/db.ts` — additive `ALTER TABLE` migration for `receipt_serial` (**no reseed needed**, unlike the 7.3 CHECK change); `setQueryReceipt()`. `src/a2a/seller-executor.ts` — accepted rows store the attestation hash in criteria JSON (same pattern as `declineReason`; safe because `parseCriteria` whitelists, so the x402 gate ignores it); `recordCompletedSale(queryId, tx, payerAccountId?)` gained mint as step 3. `src/x402/server.ts` — the settlement header's **`payer`** is decoded and passed through, so the receipt goes to whoever actually paid, not to a configured account. `src/web/api.ts` + `index.html` — Receipt column with HashScan link. `scripts/test-receipt-nft.ts` (**new**), `package.json` (`test:receipt`), `.env.example`, `README.md`.
+**On-chain state created:** collection **`0.0.9743962`** ("Data Access Receipt" / RCPT), seller treasury + sole supply key, no admin key (immutable), buyer `0.0.9697053` associated. Recorded in the local `.env`.
+**Verification:** `npx tsc --noEmit` clean. `npm run test:receipt` → **10/10**, one real purchase (`0.0.7162784@1784980903.849328180`): serial **#1** confirmed **in the buyer's account via the mirror node** (not our ledger), metadata decodes to `{"q":23,"hcs":44,"att":"0xcbcb80ed5232"}` — negotiation id, the sale's HCS sequence, and a prefix of the attestation hash stored on the row. Replay: `recordCompletedSale` again → `alreadyCompleted=true`, **total supply still 1**, serial unchanged. Panel row carries `receiptSerial=1` + `https://hashscan.io/testnet/token/0.0.9743962/1`. Regressions: `test:errors` **17/17**, `test:e2e` **18/18**. (`verify:phase7` not re-run — it counts sale events and completed rows, both untouched.)
+**What the next person should do:** Phase 9.3 — demo script. The receipt is a strong closing beat: end on the buyer's HashScan account page showing the NFT it walked away with.
+**Known issues / things to watch for:**
+- **NFT metadata is capped at 100 bytes by Hedera**, which is why the attestation hash is truncated to 14 chars in the token — the full hash is in the HCS attestation message the metadata points into. Do not "fix" the truncation.
+- **A new buyer cannot receive receipts until it associates with `0.0.9743962`.** The transfer step would fail (recorded in `CompletedSale.errors`; the sale still completes). Demo buyer is associated.
+- The mint is **best-effort** like the HCS/feedback steps: unset `HTS_RECEIPT_TOKEN_ID` → skipped with a warning (not an error — fresh clones must not log an error per sale); a real mint failure → `errors[]`, sale still completes. A sale without a receipt is therefore possible; the panel shows `—`.
+- The recipient comes from the **settlement header's `payer`** field, which is optional in the x402 type. If a facilitator ever omits it, receipts are skipped with a warning — never guessed.
+- The idempotency claim rests on the **existing completed-guard** in `recordCompletedSale`; the same concurrency caveat from session 39 applies (two simultaneous settlements racing the guard).
+- Still open: `allowedDataTypes` unenforced; earnings sum negotiated vs charged price; `create-audit-topic.ts` still has no FORCE guard (the new token script does); `vitest` + `@langchain/openai` declared but unused.
 
 ### 2026-07-25 — Emre — Claude Code session (42)
 **Completed:** The compliance attestation is now a real, publicly readable record instead of a local list check — **and Phase 9.2**, the requirement coverage table.

@@ -229,8 +229,13 @@ function scheduleCompletion(res: Response, queryId: number): void {
     }
 
     let transactionId: string;
+    let payer: string | undefined;
     try {
-      transactionId = String(decodePaymentResponseHeader(String(header)).transaction);
+      const settled = decodePaymentResponseHeader(String(header));
+      transactionId = String(settled.transaction);
+      // Who actually paid — the receipt NFT goes to this account, not to a
+      // configured one, so a different payer would get its own receipt.
+      payer = settled.payer ? String(settled.payer) : undefined;
     } catch (error) {
       console.error(`[settle] could not decode PAYMENT-RESPONSE:`, error);
       return;
@@ -238,14 +243,14 @@ function scheduleCompletion(res: Response, queryId: number): void {
 
     // Deliberately not awaited: the buyer already has its data, and the audit
     // and reputation writes are Hedera transactions of their own.
-    recordCompletedSale(queryId, transactionId)
+    recordCompletedSale(queryId, transactionId, payer)
       .then((sale) => {
         console.log(
           sale.alreadyCompleted
             ? `[settle] query ${sale.queryId} was already completed — no second audit entry or feedback written`
             : `[settle] query ${sale.queryId} completed — buyer ${sale.buyerAgentId}, ` +
               `payment ${sale.transactionId}, HCS seq ${sale.auditSequenceNumber ?? "-"}, ` +
-              `feedback #${sale.feedbackIndex ?? "-"}`,
+              `feedback #${sale.feedbackIndex ?? "-"}, receipt #${sale.receipt?.serial ?? "-"}`,
         );
         for (const problem of sale.errors) console.error(`[settle] ${problem}`);
       })

@@ -258,10 +258,10 @@
           </div>
           <table>
             <thead>
-              <tr><th>When</th><th>Buyer</th><th>Cohort</th><th>Price</th><th>Payment</th></tr>
+              <tr><th>When</th><th>Buyer</th><th>Cohort</th><th>Price</th><th>Payment</th><th>Receipt</th></tr>
             </thead>
             <tbody id="sales-body">
-              <tr><td colspan="5" class="empty">No sales yet.</td></tr>
+              <tr><td colspan="6" class="empty">No sales yet.</td></tr>
             </tbody>
           </table>
           <p class="declines" id="declines"></p>
@@ -381,7 +381,7 @@
 
           const body = $("sales-body");
           if (!data.sales?.length) {
-            body.innerHTML = '<tr><td colspan="5" class="empty">No sales yet.</td></tr>';
+            body.innerHTML = '<tr><td colspan="6" class="empty">No sales yet.</td></tr>';
           } else {
             body.innerHTML = data.sales
               .map(
@@ -393,6 +393,12 @@
                   `<td>${
                     s.hashscanUrl
                       ? `<a href="${encodeURI(s.hashscanUrl)}" target="_blank" rel="noreferrer">HashScan ↗</a>`
+                      : "—"
+                  }</td>` +
+                  // The NFT the buyer holds; sales from before receipts show —
+                  `<td>${
+                    s.receiptUrl
+                      ? `<a href="${encodeURI(s.receiptUrl)}" target="_blank" rel="noreferrer">#${escapeHtml(s.receiptSerial)} ↗</a>`
                       : "—"
                   }</td></tr>`,
               )

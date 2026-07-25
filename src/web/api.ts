@@ -354,6 +354,7 @@ export function createApiRouter(): Router {
    * agent turned down" is a different claim from "what the owner was paid".
    */
   api.get("/earnings", (_req, res) => {
+    const receiptToken = process.env.HTS_RECEIPT_TOKEN_ID;
     const db = openDatabase();
     try {
       const rows = db
@@ -378,6 +379,12 @@ export function createApiRouter(): Router {
           hashscanUrl: row.tx_hash
             ? `https://hashscan.io/testnet/transaction/${toHashScanTransactionId(row.tx_hash)}`
             : null,
+          // Rows from before receipts existed carry NULL and render as "—".
+          receiptSerial: row.receipt_serial,
+          receiptUrl:
+            row.receipt_serial && receiptToken
+              ? `https://hashscan.io/testnet/token/${receiptToken}/${row.receipt_serial}`
+              : null,
           createdAt: row.created_at,
         })),
         declines: declined.slice(0, 10).map((row) => ({

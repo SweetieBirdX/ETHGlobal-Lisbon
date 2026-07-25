@@ -15,6 +15,7 @@ import {
 import {
   insertQuery,
   openDatabase,
+  setQueryReceipt,
   updateQueryStatus,
   type QueryRow,
 } from "../data/db.js";
@@ -28,6 +29,7 @@ import {
 } from "../erc8004/validation.js";
 import { logAuditEvent } from "../hedera/audit.js";
 import { createSellerClient } from "../hedera/clients.js";
+import { mintReceipt, receiptTokenId } from "../hedera/receipt.js";
 import { parsePolicy, type DataPolicy } from "../policy/parser.js";
 import {
   COHORT_INSIGHT_PATH,
@@ -195,6 +197,8 @@ export interface CompletedSale {
   feedbackIndex?: string;
   /** Set when the sale was already recorded and nothing was written again. */
   alreadyCompleted?: boolean;
+  /** HTS receipt NFT handed to the payer, when one was minted. */
+  receipt?: { serial: number; hashscanUrl: string };
   /** Steps that failed, so a partial completion is never reported as clean. */
   errors: string[];
 }
@@ -202,7 +206,8 @@ export interface CompletedSale {
 /**
  * Everything the seller does *after* a payment settles, in order:
  * write the audit entry to HCS, publish reputation feedback about the buyer,
- * then mark the sale complete in the local ledger.
+ * mint the receipt NFT to the account that paid, then mark the sale complete
+ * in the local ledger.
  *
  * Each step is attempted even if an earlier one failed — a reputation outage
  * should not cost the audit trail its record — and every failure is reported
@@ -215,6 +220,8 @@ export interface CompletedSale {
 export async function recordCompletedSale(
   queryId: number,
   transactionId: string,
+  /** Account that settled the payment — where the receipt NFT goes. */
+  payerAccountId?: string,
 ): Promise<CompletedSale> {
   const db = openDatabase();
   const errors: string[] = [];
@@ -280,7 +287,40 @@ export async function recordCompletedSale(
       errors.push(`Reputation feedback failed: ${String(error).slice(0, 160)}`);
     }
 
-    // 3. Local ledger.
+    // 3. Receipt NFT — one HTS token to the account that paid, tying the
+    //    payment, the audit entry and the attestation together in the buyer's
+    //    own wallet. Best-effort like the steps above; the sale stands either
+    //    way. The completed-guard at the top is what makes this run-once.
+    const tokenId = receiptTokenId();
+    if (!tokenId) {
+      // Not configured is not a failure — run scripts/create-receipt-token.ts
+      // to enable receipts.
+      console.warn(
+        `[receipt] HTS_RECEIPT_TOKEN_ID is not set — no receipt NFT for query ${queryId}`,
+      );
+    } else if (!payerAccountId) {
+      console.warn(
+        `[receipt] settlement carried no payer account — no receipt NFT for query ${queryId}`,
+      );
+    } else {
+      try {
+        const attestationHash = (JSON.parse(query.criteria) as { attestation?: string })
+          .attestation;
+        const minted = await mintReceipt({
+          tokenId,
+          queryId,
+          buyerAccountId: payerAccountId,
+          auditSequenceNumber: result.auditSequenceNumber,
+          attestationHash,
+        });
+        setQueryReceipt(db, queryId, String(minted.serial));
+        result.receipt = { serial: minted.serial, hashscanUrl: minted.hashscanUrl };
+      } catch (error) {
+        errors.push(`Receipt NFT mint failed: ${String(error).slice(0, 160)}`);
+      }
+    }
+
+    // 4. Local ledger.
     updateQueryStatus(db, queryId, "completed", transactionId);
 
     return result;
@@ -585,7 +625,17 @@ export class SellerExecutor implements AgentExecutor {
       queryId = insertQuery(
         db,
         String(buyerAgentId),
-        { activityType, ...(offer.ageRange ? { ageRange: offer.ageRange } : {}) },
+        {
+          activityType,
+          ...(offer.ageRange ? { ageRange: offer.ageRange } : {}),
+          // Carried on the row so the receipt NFT can reference the attestation
+          // that admitted this buyer. Extra keys here are ignored by
+          // parseCriteria, so the x402 criteria gate is unaffected — same
+          // pattern as declineReason on refused rows.
+          ...(identity.attestation
+            ? { attestation: identity.attestation.requestHash }
+            : {}),
+        },
         offer.priceHbar!,
         "accepted",
       );

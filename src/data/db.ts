@@ -48,6 +48,8 @@ export interface QueryRow {
   price: number;
   status: QueryStatus;
   tx_hash: string | null;
+  /** Serial of the HTS receipt NFT minted for this sale, once there is one. */
+  receipt_serial: string | null;
   created_at: string;
 }
 
@@ -147,7 +149,24 @@ export function openDatabase(path: string = DEFAULT_DB_PATH): Database.Database 
     CREATE INDEX IF NOT EXISTS idx_queries_buyer ON queries (buyer_agent_id);
   `);
 
+  // Migration: receipt_serial arrived after databases already existed, and
+  // CREATE TABLE IF NOT EXISTS will not touch an existing table. ALTER is
+  // additive, so — unlike the Phase 7.3 CHECK change — nothing is reseeded.
+  const columns = db.prepare("PRAGMA table_info(queries)").all() as { name: string }[];
+  if (!columns.some((column) => column.name === "receipt_serial")) {
+    db.exec("ALTER TABLE queries ADD COLUMN receipt_serial TEXT");
+  }
+
   return db;
+}
+
+/** Records the receipt NFT minted for a completed sale. */
+export function setQueryReceipt(
+  db: Database.Database,
+  id: number,
+  receiptSerial: string,
+): void {
+  db.prepare("UPDATE queries SET receipt_serial = ? WHERE id = ?").run(receiptSerial, id);
 }
 
 /** Stores one user's fitness record, encrypting it on the way in. */
