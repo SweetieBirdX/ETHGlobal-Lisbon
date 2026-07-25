@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 0 — Project Skeleton (in progress, 0.1–0.4 done)
+**Active phase:** Phase 0 — Project Skeleton (all code prompts 0.1–0.5 done; **blocked on the manual step**: open two Hedera testnet accounts and fill in `.env`)
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -21,7 +21,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 0.2 package.json and TypeScript setup
 - [x] 0.3 Install dependencies
 - [x] 0.4 Folder structure
-- [ ] 0.5 .env.example
+- [x] 0.5 .env.example
 - [ ] Manual: two testnet accounts opened, `.env` filled in
 
 ### Phase 1 — Hedera Base Layer
@@ -104,6 +104,13 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (5)
+**Completed:** Phase 0.5 — Phase 0 code prompts are now all done
+**Files changed:** `.env.example` (new)
+**Verification:** Copied it to `.env` and parsed it with `dotenv`: all 10 expected keys present, no extras, the 8 secret/config values empty, and the two ERC-8004 addresses matching `CLAUDE.md` exactly. `git check-ignore -v .env` → matched by `.gitignore:2`, and `.env` never appeared in `git status` (`.env.example` is not affected — the rule is an exact match on `.env`). Temporary `.env` deleted afterwards.
+**What the next person should do:** **Manual step first** — open two Hedera testnet accounts at portal.hedera.com/dashboard, `cp .env.example .env`, fill in the seller/buyer IDs + keys and `OPENAI_API_KEY`. Then Phase 1.1 (Hedera clients). `HCS_AUDIT_TOPIC_ID` stays empty until 1.3 generates it; the x402 values until Phase 3.
+**Known issues / things to watch for:** none for this step. TS18003 from 0.4 still applies until the first `.ts` file exists.
 
 ### 2026-07-25 — Emre — Claude Code session (4)
 **Completed:** Phase 0.4
