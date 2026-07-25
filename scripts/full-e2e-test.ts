@@ -1,254 +1,272 @@
 import "dotenv/config";
 import type { Server } from "node:http";
 import { createSellerApp, SELLER_PORT } from "../src/a2a/seller-server.js";
+import { setPolicy } from "../src/a2a/seller-executor.js";
 import {
   negotiateAndPurchase,
-  type PurchaseResult,
+  negotiateWithStrategy,
+  sendNegotiationRequest,
 } from "../src/a2a/buyer-client.js";
-import { openDatabase, type QueryRow } from "../src/data/db.js";
-import { getBuyerAgentId } from "../src/erc8004/agent-ids.js";
-import { reputationRegistry } from "../src/erc8004/contracts.js";
-import { FEEDBACK_TAG } from "../src/erc8004/feedback.js";
-import { createSellerWallet } from "../src/erc8004/wallets.js";
-import { parsePolicy } from "../src/policy/parser.js";
-import { setPolicy } from "../src/a2a/seller-executor.js";
-import { startX402Server } from "../src/x402/server.js";
+import { app as x402App, PORT as X402_PORT } from "../src/x402/server.js";
+import { getTrack, openDatabase, type LicenceRow } from "../src/data/db.js";
 import { countTopicEventsSince, topicSequence } from "../src/hedera/mirror.js";
+import { requireIdentityTopicId } from "../src/identity/registry.js";
+import type { LicenceGrant } from "../src/types/marketplace.js";
 
 /**
- * The whole system, end to end, in one run.
+ * The whole story, end to end, against live Hedera testnet:
  *
- * Starts both servers, sets the owner's policy from a plain-language sentence,
- * and then puts two offers to the seller agent: one the policy permits and one
- * it does not. The accepted offer must settle a real payment on Hedera and
- * leave a trail — an HCS audit entry, ERC-8004 feedback and a completed row —
- * while the rejected one must cost nothing and leave nothing behind.
+ *   1. a permitted sync licence settles — HCS audit entry, reputation
+ *      feedback, certificate NFT, and the track's capacity drops;
+ *   2. a political-ad request at a generous price is refused — money cannot
+ *      buy a forbidden use, and nothing is paid;
+ *   3. an over-capacity request is refused before any payment instruction;
+ *   4. a lowball is declined with the floor disclosed, the buyer counters at
+ *      exactly that floor autonomously, and the second round settles.
  *
- *   npx tsx scripts/full-e2e-test.ts
+ *   npm run test:e2e
  *
- * Costs 0.5 HBAR of testnet funds per run.
+ * Costs real (testnet) HBAR: scenarios 1 and 4 each settle a licence.
+ * Every "N events were written" assertion uses countTopicEventsSince with a
+ * topicSequence() baseline — never a windowed count, which can slide.
  */
 
-/** What the owner types once, in their own words. */
-const POLICY_STATEMENT =
-  "You can sell aggregated statistics from my running and cycling data — performance scores and " +
-  "session counts only — to verified research companies, minimum 0.4 HBAR per query. " +
-  "Never share my heart rate, and never any health or medication data.";
+const checks: [string, boolean, string][] = [];
 
-/** The audit entry a completed sale writes. */
-const SALE_EVENT = "data_access_completed";
-
-/** The audit and reputation writes happen after the buyer has its data. */
-const CHAIN_SETTLE_WAIT_MS = 30_000;
-
-const checks: [string, boolean][] = [];
-const record = (label: string, passed: boolean) => {
-  checks.push([label, passed]);
+function record(label: string, passed: boolean, detail = ""): void {
+  checks.push([label, passed, detail]);
   console.log(`  ${passed ? "OK  " : "FAIL"} ${label}`);
+  if (detail) console.log(`       ${detail}`);
+}
+
+/** The mirror node lags consensus by a few seconds. */
+const MIRROR_LAG_MS = 10_000;
+
+const POLICY = {
+  allowedLicenceTypes: ["sync", "sampling"],
+  minPricePerShareHbar: 0.001,
+  maxSharesPerLicence: 5_000,
+  forbiddenUseCases: ["political-ad"],
 };
 
-const sellerWallet = createSellerWallet();
-const buyerAgentId = getBuyerAgentId();
-/**
- * Sale records written after a sequence baseline. Counted by event AND from a
- * baseline: the topic also carries compliance attestations, and a windowed
- * count slides backwards once the topic outgrows the window.
- */
-const newSaleEntries = (afterSequence: number): Promise<number> =>
-  countTopicEventsSince(SALE_EVENT, afterSequence);
-
-async function feedbackCount(): Promise<number> {
-  const summary = await reputationRegistry.getSummary!(
-    buyerAgentId,
-    [sellerWallet.address],
-    FEEDBACK_TAG,
-    "",
-  );
-  return Number(summary[0]);
-}
-
-function latestQuery(): QueryRow | undefined {
+function trackShares(trackId: number): number {
   const db = openDatabase();
   try {
-    return db
-      .prepare("SELECT * FROM queries ORDER BY id DESC LIMIT 1")
-      .get() as QueryRow | undefined;
+    const track = getTrack(db, trackId);
+    if (!track) throw new Error(`track ${trackId} missing — run scripts/seed-catalog.ts`);
+    return track.available_shares;
   } finally {
     db.close();
   }
 }
 
-/** Sales the owner was actually paid for — the only rows that mean money. */
-function countCompleted(): number {
+function licenceRow(id: number): LicenceRow | undefined {
   const db = openDatabase();
   try {
-    return (
-      db
-        .prepare("SELECT COUNT(*) AS n FROM queries WHERE status = 'completed'")
-        .get() as { n: number }
-    ).n;
+    return db.prepare("SELECT * FROM licences WHERE id = ?").get(id) as LicenceRow | undefined;
   } finally {
     db.close();
   }
 }
 
-async function scenarioAccepted(): Promise<void> {
-  console.log("\n=== Scenario 1: an offer the owner's policy permits ===\n");
-
-  const seqBefore = await topicSequence();
-  const beforeFeedback = await feedbackCount();
-  console.log(`  baseline: topic seq ${seqBefore}, feedback count ${beforeFeedback}\n`);
-
-  const result: PurchaseResult = await negotiateAndPurchase(
-    { category: "running performance" },
-    0.5,
-    { onStep: (message) => console.log(`  ${message}`) },
-  );
-
-  console.log("");
-  record("seller accepted the offer", result.negotiation.decision === "accept");
-  record("payment settled", result.purchase?.settlement?.success === true);
-  record("HTTP 200 with the aggregate", result.purchase?.status === 200);
-
-  const data = result.purchase?.data as Record<string, unknown> | undefined;
-  record("aggregate has a participant count", typeof data?.["participantCount"] === "number");
-  record(
-    "no raw per-user fields in the payload",
-    !/vo2max|restingHeartRate|weeklyDistance/i.test(JSON.stringify(data ?? {})),
-  );
-
-  console.log(`\n  data: ${JSON.stringify(data)}`);
-  console.log(`  payment: ${result.purchase?.settlement?.transaction}`);
-  console.log(`  ${result.purchase?.settlement?.hashscanUrl}`);
-
-  console.log(`\n  waiting ${CHAIN_SETTLE_WAIT_MS / 1000}s for the post-payment chain...`);
-  await new Promise((resolve) => setTimeout(resolve, CHAIN_SETTLE_WAIT_MS));
-
-  const newSales = await newSaleEntries(seqBefore);
-  const afterFeedback = await feedbackCount();
-  const query = latestQuery();
-
-  console.log(`  after: new sale entries ${newSales}, feedback count ${afterFeedback}\n`);
-  record("exactly one HCS sale entry written", newSales === 1);
-  record("ERC-8004 feedback submitted", afterFeedback === beforeFeedback + 1);
-  record("query marked completed", query?.status === "completed");
-  record(
-    "query carries the payment transaction",
-    query?.tx_hash === result.purchase?.settlement?.transaction,
-  );
-  record("query attributed to the buyer agent", query?.buyer_agent_id === buyerAgentId);
+function licenceIdOf(paymentUrl: string): number {
+  return Number(new URL(paymentUrl).searchParams.get("licenceId"));
 }
 
-async function scenarioRejected(): Promise<void> {
-  console.log("\n=== Scenario 2: an offer the policy forbids, at double the price ===\n");
+/** Completion runs after the response flushes — poll the row until it lands. */
+async function awaitCompletion(licenceId: number): Promise<LicenceRow> {
+  for (let attempt = 1; attempt <= 45; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const row = licenceRow(licenceId);
+    if (row?.status === "completed" && row.certificate_serial !== null) return row;
+  }
+  throw new Error(`licence ${licenceId} never completed`);
+}
 
-  const seqBefore = await topicSequence();
-  const beforeFeedback = await feedbackCount();
-  const beforeCompleted = countCompleted();
+/** 1. The happy path: negotiate, pay, and collect every artefact of the sale. */
+async function permittedLicenceSettles(): Promise<void> {
+  console.log("\n=== 1. A permitted sync licence settles ===\n");
 
-  const result = await negotiateAndPurchase({ category: "swimming" }, 0.9, {
-    onStep: (message) => console.log(`  ${message}`),
-  });
+  const trackId = 1;
+  const shares = 150;
+  const sharesBefore = trackShares(trackId);
 
-  console.log(`\n  reply: ${result.negotiation.reply.slice(0, 120)}\n`);
-  record("seller declined", result.negotiation.decision === "decline");
-  record("declined for category, not price", result.negotiation.reason === "category_mismatch");
-  record("no payment was attempted", result.purchase === undefined);
-  record("no payment instruction issued", result.negotiation.payment === undefined);
+  const outcome = await negotiateAndPurchase(
+    { trackId, shares, licenceType: "sync", territory: "worldwide", useCase: "film" },
+    0.5,
+    { onStep: (message) => console.log(`       ${message}`) },
+  );
 
-  // A refusal charges nothing and produces no sale. Two things are legitimately
-  // written, so neither is the absence to assert on: a `declined` row in the
-  // owner's own ledger (session 36), and the compliance attestation from gate 1,
-  // which is recorded for any agent that gets that far — including one that is
-  // then refused. What must be absent is a *sale*.
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  record("no new HCS sale entry", (await newSaleEntries(seqBefore)) === 0);
-  record("no new reputation feedback", (await feedbackCount()) === beforeFeedback);
-  record("no new completed sale", countCompleted() === beforeCompleted);
+  record("the offer is accepted", outcome.negotiation.decision === "accept");
+  record("the payment settled", outcome.purchase?.settlement?.success === true);
+
+  const grant = outcome.purchase?.data as LicenceGrant | undefined;
   record(
-    "the refusal is recorded as declined, for the owner only",
-    latestQuery()?.status === "declined",
+    "the grant carries the decrypted master reference",
+    typeof grant?.masterRef === "string" && grant.masterRef.length > 0,
+    grant?.masterRef ? `${grant.masterRef.slice(0, 44)}…` : "absent",
+  );
+
+  const licenceId = licenceIdOf(outcome.negotiation.payment!.url);
+  const row = await awaitCompletion(licenceId);
+  record("the licence completed with the payment tx", Boolean(row.tx_hash), row.tx_hash ?? "");
+  record(
+    "a certificate NFT was minted for it",
+    row.certificate_serial !== null,
+    `serial ${row.certificate_serial}`,
+  );
+  record(
+    "the attestation that admitted the buyer rides on the row",
+    typeof row.attestation_hash === "string" && row.attestation_hash.startsWith("0x"),
+  );
+
+  const sharesAfter = trackShares(trackId);
+  record(
+    "the track's capacity dropped by exactly the granted shares",
+    sharesAfter === sharesBefore - shares,
+    `${sharesBefore} → ${sharesAfter} (−${shares})`,
   );
 }
 
-/**
- * The health refusal — the reason the health fields exist at all.
- *
- * Permitted category, fair price, but the buyer also wants cycle-tracking
- * data. The owner's policy forbids the entire health bucket, so the policy
- * gate must refuse — and say why in words fit to show on camera.
- */
-async function scenarioHealthDataRefused(): Promise<void> {
-  console.log("\n=== Scenario 3: permitted category, fair price — but health data ===\n");
+/** 2. Money cannot buy a forbidden use. */
+async function forbiddenUseIsRefused(): Promise<void> {
+  console.log("\n=== 2. A political ad is refused at any price ===\n");
 
-  const seqBefore = await topicSequence();
-  const beforeCompleted = countCompleted();
-
-  const result = await negotiateAndPurchase(
-    { category: "running", dataTypes: ["cycleTracking"] },
-    0.5,
-    { onStep: (message) => console.log(`  ${message}`) },
+  const reply = await sendNegotiationRequest(
+    { trackId: 2, shares: 100, licenceType: "sync", territory: "worldwide", useCase: "political-ad" },
+    1_000,
   );
 
-  console.log(`\n  reply: ${result.negotiation.reply.slice(0, 160)}\n`);
-  record("seller declined the health request", result.negotiation.decision === "decline");
   record(
-    "declined specifically for the data type",
-    result.negotiation.reason === "data_type_not_permitted",
+    "the generous political-ad offer is refused",
+    reply.decision === "decline" && reply.reason === "use_case_forbidden",
+    reply.reply.slice(0, 130),
   );
+  record("the refusal names the use, not the price", reply.reply.includes("political advertising"));
+  record("no payment instruction is issued", reply.payment === undefined);
   record(
-    "the refusal names health data, legibly",
-    /health data/i.test(result.negotiation.reply) &&
-      /cycle/i.test(result.negotiation.reply),
+    "the floor is not disclosed — this is not a haggling position",
+    reply.sellerMinimumHbar === undefined,
   );
-  record("no payment was attempted", result.purchase === undefined);
-  record("no payment instruction issued", result.negotiation.payment === undefined);
+}
 
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  record("no new HCS sale entry", (await newSaleEntries(seqBefore)) === 0);
-  record("no new completed sale", countCompleted() === beforeCompleted);
-  const declineRow = latestQuery();
-  record(
-    "the refusal is in the owner's ledger with its reason",
-    declineRow?.status === "declined" &&
-      declineRow.criteria.includes("data_type_not_permitted"),
+/** 3. A licence the catalogue could not grant is refused before payment. */
+async function overCapacityIsRefused(): Promise<void> {
+  console.log("\n=== 3. An over-capacity request is refused before payment ===\n");
+
+  const trackId = 3;
+  const available = trackShares(trackId);
+  const reply = await sendNegotiationRequest(
+    // Above what is left but under the policy cap, so gate 3 gives the verdict.
+    {
+      trackId,
+      shares: Math.min(available + 100, 5_000),
+      licenceType: "sync",
+      territory: "worldwide",
+      useCase: "film",
+    },
+    50,
   );
+
+  record(
+    "the over-capacity request is refused",
+    reply.decision === "decline" && reply.reason === "insufficient_shares",
+    reply.reply.slice(0, 130),
+  );
+  record(
+    "the refusal names both percentages",
+    /asked for [\d.]+% but only [\d.]+%/.test(reply.reply),
+  );
+  record("no payment instruction is issued", reply.payment === undefined);
+  record("nothing was reserved", trackShares(trackId) === available);
+}
+
+/** 4. The autonomous haggle: lowball → counter at the disclosed floor → settle. */
+async function lowballCounterSettles(): Promise<void> {
+  console.log("\n=== 4. Lowball, counter at the floor, settle ===\n");
+
+  const trackId = 5;
+  const shares = 200;
+  const floor = POLICY.minPricePerShareHbar * shares;
+
+  const result = await negotiateWithStrategy(
+    { trackId, shares, licenceType: "sync", territory: "worldwide", useCase: "documentary" },
+    0.05, // lowball, well under the floor
+    1.5, // budget comfortably above both floor and quote
+    { onStep: (message) => console.log(`       ${message}`) },
+  );
+
+  record("round 1 is declined as price_too_low", result.rounds[0]?.reason === "price_too_low");
+  record(
+    `the counter is exactly the disclosed floor (${floor} ℏ)`,
+    result.rounds[1]?.offeredPriceHbar === floor,
+    `countered at ${result.rounds[1]?.offeredPriceHbar} ℏ`,
+  );
+  record("round 2 is accepted", result.rounds[1]?.decision === "accept");
+  record("the accepted round settled", result.purchase?.settlement?.success === true);
+
+  const licenceId = licenceIdOf(result.negotiation.payment!.url);
+  const row = await awaitCompletion(licenceId);
+  record("the haggled licence completed", row.status === "completed", `tx ${row.tx_hash}`);
 }
 
 async function main(): Promise<void> {
-  console.log("Personal Fitness Data Marketplace — full end-to-end test");
-  console.log("=======================================================");
+  console.log("End-to-end: negotiation, refusals and settlement");
+  console.log("================================================");
 
-  console.log(`\nOwner's policy, as typed:\n  "${POLICY_STATEMENT}"`);
-  const policy = await parsePolicy(POLICY_STATEMENT);
-  setPolicy(policy);
-  console.log(`\nParsed to: ${JSON.stringify(policy)}`);
+  // Baselines before anything is written, so each run's counters are its own.
+  const auditBaseline = await topicSequence();
+  const identityTopic = requireIdentityTopicId();
+  const identityBaseline = await topicSequence(identityTopic);
+  console.log(
+    `\naudit topic baseline seq ${auditBaseline}, identity topic baseline seq ${identityBaseline}`,
+  );
 
-  const servers: Server[] = [];
+  setPolicy(POLICY);
+  const sellerServer: Server = createSellerApp().listen(SELLER_PORT);
+  const x402Server: Server = x402App.listen(X402_PORT);
+
   try {
-    servers.push(createSellerApp().listen(SELLER_PORT));
-    servers.push(startX402Server());
-    // Let both finish binding before the buyer goes looking for them.
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
 
-    await scenarioAccepted();
-    await scenarioRejected();
-    await scenarioHealthDataRefused();
+    await permittedLicenceSettles();
+    await forbiddenUseIsRefused();
+    await overCapacityIsRefused();
+    await lowballCounterSettles();
+
+    console.log(`\n  waiting ${MIRROR_LAG_MS / 1000}s for the mirror node...\n`);
+    await new Promise((resolve) => setTimeout(resolve, MIRROR_LAG_MS));
+
+    console.log("=== HCS event counts since this run's baselines ===\n");
+    const completed = await countTopicEventsSince("licence_completed", auditBaseline);
+    record(
+      "exactly the two settled licences wrote licence_completed events",
+      completed === 2,
+      `licence_completed +${completed}`,
+    );
+    const feedback = await countTopicEventsSince("agent_feedback", identityBaseline, identityTopic);
+    record(
+      "exactly two reputation feedbacks were recorded",
+      feedback === 2,
+      `agent_feedback +${feedback}`,
+    );
   } finally {
-    for (const server of servers) server.close();
+    setPolicy(null);
+    sellerServer.close();
+    x402Server.close();
   }
 
   const passed = checks.filter(([, ok]) => ok).length;
-  console.log(`\n=======================================================`);
+  console.log(`\n================================================`);
   console.log(`${passed}/${checks.length} checks passed`);
-  for (const [label, ok] of checks) {
-    if (!ok) console.log(`  FAILED: ${label}`);
+  for (const [label, ok, detail] of checks) {
+    if (!ok) console.log(`  FAILED: ${label}${detail ? ` — ${detail}` : ""}`);
   }
 
   if (passed !== checks.length) process.exitCode = 1;
 }
 
 main().catch((error) => {
-  console.error("\nEnd-to-end test failed:", error);
+  console.error("\nEnd-to-end suite failed:", error);
   process.exit(1);
 });
