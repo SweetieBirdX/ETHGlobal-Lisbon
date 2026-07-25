@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { Role, type Message, type Part, type SendMessageResult } from "@a2a-js/sdk";
 import { ClientFactory } from "@a2a-js/sdk/client";
 import { getBuyerAgentId } from "../erc8004/agent-ids.js";
+import type { LicenceOffer } from "../types/marketplace.js";
 import { payAndFetch, type PayAndFetchResult } from "../x402/pay.js";
 import { SELLER_AGENT_URL } from "./seller-agent-card.js";
 
 /**
- * The research company's buyer agent.
+ * The content producer's buyer agent.
  *
  * It knows one thing about the seller: a base URL. Everything else — which
  * transport to use, which protocol version, where the JSON-RPC endpoint lives —
@@ -17,20 +18,11 @@ import { SELLER_AGENT_URL } from "./seller-agent-card.js";
 /** Base URL of the seller agent, derived from the endpoint it advertises. */
 export const SELLER_BASE_URL = new URL(SELLER_AGENT_URL).origin;
 
-/** What the buyer wants to buy access to. */
-export interface DataCriteria {
-  /** Fitness data category, e.g. "running performance". */
-  category: string;
-  /** Age band of the cohort, e.g. "25-34". */
-  ageRange?: string;
-  /** How many participants the buyer wants in the aggregate. */
-  cohortSize?: number;
-  /**
-   * Specific data types requested, e.g. ["performanceScore"] or the
-   * health-bucket ["cycleTracking"]. Omitted = the standard aggregate.
-   */
-  dataTypes?: string[];
-}
+/**
+ * What the buyer wants to license — the shared {@link LicenceOffer} minus the
+ * price, which travels as its own argument because it is the thing negotiated.
+ */
+export type LicenceCriteria = Omit<LicenceOffer, "priceHbar">;
 
 /** The paid endpoint the seller routes an accepted offer to (Phase 7.1). */
 export interface PaymentInstruction {
@@ -80,19 +72,22 @@ function textPart(value: string): Part {
   };
 }
 
-/** Renders the offer as the sentence a human buyer would have written. */
-export function formatOffer(criteria: DataCriteria, offeredPrice: number): string {
-  const details = [
-    `category: ${criteria.category}`,
-    criteria.ageRange ? `age range: ${criteria.ageRange}` : undefined,
-    criteria.cohortSize ? `cohort size: ${criteria.cohortSize}` : undefined,
-    criteria.dataTypes?.length
-      ? `data types: ${criteria.dataTypes.join(", ")}`
+/** Renders the offer as the sentence a human licensing agent would have written. */
+export function formatOffer(criteria: LicenceCriteria, offeredPrice: number): string {
+  const scope = [
+    criteria.shares !== undefined
+      ? `${criteria.shares} shares (${(criteria.shares / 100).toFixed(2)}%)`
       : undefined,
-  ].filter(Boolean);
+    criteria.territory,
+    criteria.useCase ? `for ${criteria.useCase} use` : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return (
-    `We would like access to an anonymised cohort aggregate (${details.join(", ")}). ` +
+    `We would like a ${criteria.licenceType ? `${criteria.licenceType} licence` : "licence"} on ` +
+    `${criteria.trackId !== undefined ? `track ${criteria.trackId}` : "one of your tracks"}` +
+    `${scope ? ` — ${scope}` : ""}. ` +
     `Our offered price is ${offeredPrice} HBAR, payable immediately on acceptance.`
   );
 }
@@ -199,7 +194,7 @@ export async function sendNegotiationMessage(
  * @param offeredPrice price in HBAR the buyer is willing to pay
  */
 export async function sendNegotiationRequest(
-  criteria: DataCriteria,
+  criteria: LicenceCriteria,
   offeredPrice: number,
   baseUrl: string = SELLER_BASE_URL,
   session?: NegotiationSession,
@@ -225,7 +220,7 @@ export async function sendNegotiationRequest(
  */
 export async function counterOffer(
   previous: NegotiationResponse,
-  criteria: DataCriteria,
+  criteria: LicenceCriteria,
   offeredPrice: number,
   baseUrl: string = SELLER_BASE_URL,
 ): Promise<NegotiationResponse> {
@@ -283,7 +278,7 @@ export interface StrategyResult {
  * that *reacts* to refusals instead of giving up after one.
  */
 export async function negotiateWithStrategy(
-  criteria: DataCriteria,
+  criteria: LicenceCriteria,
   openingPriceHbar: number,
   budgetHbar: number,
   options: {
@@ -382,7 +377,7 @@ export async function negotiateWithStrategy(
  * comes back with its reason and nothing is paid.
  */
 export async function negotiateAndPurchase(
-  criteria: DataCriteria,
+  criteria: LicenceCriteria,
   offeredPrice: number,
   options: { baseUrl?: string; onStep?: (message: string) => void } = {},
 ): Promise<PurchaseResult> {
