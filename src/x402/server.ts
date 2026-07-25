@@ -19,6 +19,7 @@ import {
   LicenceNotGrantableError,
   parseLicenceCriteria,
   quotePrice,
+  type LicenceCriteria,
 } from "../data/catalog.js";
 import { listTracks, openDatabase, type LicenceRow } from "../data/db.js";
 
@@ -141,6 +142,30 @@ app.get("/catalog", (_req, res) => {
 });
 
 /**
+ * Compares what the buyer is asking for against what was actually negotiated.
+ *
+ * Both directions matter: every negotiated term must be requested, and no
+ * requested term may differ — absent must equal absent, so an omitted
+ * `territory` cannot silently widen an EU licence to worldwide. Both sides
+ * pass through `parseLicenceCriteria`, so lowercasing, trimming and
+ * out-of-vocabulary drops are identical; the row's columns are NOT NULL, with
+ * an absent negotiated territory stored as "worldwide" — which is exactly what
+ * an absent requested territory normalises to here.
+ */
+export function matchesNegotiatedCriteria(
+  negotiated: LicenceRow,
+  requested: LicenceCriteria,
+): boolean {
+  return (
+    requested.trackId === negotiated.track_id &&
+    requested.shares === negotiated.shares &&
+    requested.licenceType === negotiated.licence_type &&
+    (requested.territory ?? "worldwide") === negotiated.territory &&
+    requested.useCase === negotiated.use_case
+  );
+}
+
+/**
  * Refuses any paid request that no negotiation authorised.
  *
  * Without this the three gates in the seller's agent are decorative: the policy
@@ -186,17 +211,8 @@ function requireAcceptedLicence(req: Request, res: Response, next: NextFunction)
   }
 
   // Deliberately does not echo the stored terms back — a caller probing with
-  // guesses should not be told what the right answer was. Both sides pass
-  // through parseLicenceCriteria, so normalisation is identical.
-  const requested = parseLicenceCriteria(req.query);
-  const matches =
-    requested.trackId === licence.track_id &&
-    requested.shares === licence.shares &&
-    requested.licenceType === licence.licence_type &&
-    (requested.territory ?? "worldwide") === licence.territory &&
-    requested.useCase === licence.use_case;
-
-  if (!matches) {
+  // guesses should not be told what the right answer was.
+  if (!matchesNegotiatedCriteria(licence, parseLicenceCriteria(req.query))) {
     res.status(403).json({
       error: "criteria_mismatch",
       message:
