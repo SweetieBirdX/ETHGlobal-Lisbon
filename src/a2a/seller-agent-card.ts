@@ -5,7 +5,7 @@ import { duplicateInterfacesForLegacy } from "@a2a-js/sdk/compat/v0_3";
  * The seller agent's public manifest.
  *
  * This is how a buyer agent discovers us: it fetches the card, sees the
- * `data-access-negotiation` skill, and knows it can open a negotiation without
+ * `licence-negotiation` skill, and knows it can open a negotiation without
  * any prior arrangement between the two operators — which is the whole point of
  * agent-to-agent commerce.
  *
@@ -33,15 +33,15 @@ const supportedInterfaces = duplicateInterfacesForLegacy(
 );
 
 export const sellerAgentCard: AgentCard = {
-  name: "Fitness Data Seller Agent",
+  name: "Music Rights Agent",
   description:
-    "Personal data agent acting for an individual who owns their fitness and performance data. " +
-    "Negotiates access to anonymised cohort aggregates on the owner's behalf, autonomously and " +
-    "against a policy the owner set once in plain language. Raw data never leaves the owner's " +
-    "encrypted store — buyers receive aggregates, and only after payment settles on Hedera.",
+    "Licensing agent acting for a music rights holder. Negotiates fractional licences (sync, " +
+    "mechanical, sampling, performance) over the holder's tracks, autonomously and against a " +
+    "policy the holder set once in plain language. Master references stay encrypted until a " +
+    "licence is granted — buyers receive a licence, and only after payment settles on Hedera.",
   version: "0.1.0",
   provider: {
-    organization: "Personal Fitness Data Marketplace",
+    organization: "Music Licensing Marketplace",
     url: "https://github.com/SweetieBirdX/ETHGlobal-Lisbon",
   },
   supportedInterfaces,
@@ -57,25 +57,26 @@ export const sellerAgentCard: AgentCard = {
   defaultOutputModes: ["text"],
   skills: [
     {
-      id: "data-access-negotiation",
-      name: "Data access negotiation",
+      id: "licence-negotiation",
+      name: "Music licence negotiation",
       description:
-        "Receives an offer for access to a fitness data cohort (category, cohort size, price in HBAR), " +
-        "checks the buyer's ERC-8004 identity, evaluates the offer against the owner's policy, and either " +
-        "declines with a reason or accepts and returns an x402-protected endpoint the buyer can pay to.",
-      tags: ["negotiation", "data-marketplace", "fitness", "hedera", "x402", "erc-8004"],
+        "Receives a licence offer for a track (track, share count, licence type, territory, use case, " +
+        "price in HBAR), checks the buyer's HCS-registered identity, evaluates the offer against the " +
+        "rights holder's policy, and either declines with a reason or accepts and returns an " +
+        "x402-protected endpoint the buyer can pay to.",
+      tags: ["negotiation", "music-licensing", "sync", "hedera", "x402", "hcs-14"],
       examples: [
-        "We would like running performance data for ages 25-34. We can pay 0.5 HBAR for the cohort aggregate.",
-        "Offering 0.1 HBAR for sleep data across 500 participants.",
-        "What categories of data can we buy, and at what price?",
+        "We need a sync licence for track 3, 500 shares, worldwide, for a short film. We can pay 0.5 HBAR.",
+        "Offering 0.05 HBAR for 2000 shares of track 1 for advertising use.",
+        "We want to license track 2 for a political ad campaign, 1000 shares, 5 HBAR.",
       ],
       inputModes: ["text"],
       outputModes: ["text"],
       securityRequirements: [],
     },
   ],
-  // Anyone may open a negotiation — trust comes from the buyer's on-chain
-  // ERC-8004 identity (checked in Phase 5.4), not from a transport credential.
+  // Anyone may open a negotiation — trust comes from the buyer's identity in
+  // the HCS registry (gate 1), not from a transport credential.
   securitySchemes: {},
   securityRequirements: [],
   signatures: [],
