@@ -8,7 +8,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 
 ## Current Status
 
-**Active phase:** Phase 3 — x402 Payment Layer (3.1-3.4 done; a real 0.5 ℏ payment has settled on testnet). Next: 3.5 — end-to-end payment test.
+**Active phase:** Phase 3 — x402 Payment Layer **complete** (3.1-3.5 done; two real 0.5 ℏ payments settled on testnet). Next: Phase 4.1 — seller AgentCard.
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
@@ -41,7 +41,7 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 - [x] 3.2 Express server skeleton
 - [x] 3.3 x402 middleware integration
 - [x] 3.4 Buyer-side payment script
-- [ ] 3.5 End-to-end payment test
+- [x] 3.5 End-to-end payment test
 
 ### Phase 4 — A2A Agent Skeleton
 - [ ] 4.1 Seller AgentCard
@@ -104,6 +104,14 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (12e)
+**Completed:** Phase 3.5 — **Phase 3 is done**
+**Files changed:** none (verification run only; `PLAN.md` updated). The Phase 3.2 server and the Phase 3.4 script were run against real testnet exactly as they are committed.
+**Verification:** Server started (facilitator sync OK), then `npx tsx scripts/x402-buy.ts` → **402 → signed → 200**, data `{"participantCount":456,"avgPerformanceScore":78.6,"trend":"flat"}`, `settlement: success=true payer=0.0.9697053`, `transaction: 0.0.7162784@1784948570.524376611`. Balances either side of the run: seller `1000.34283018 → 1000.84283018 ℏ` (**+0.5**), buyer `999.5 → 999 ℏ` (**−0.5**). Mirror node on that transaction id: `SUCCESS`, `CRYPTOTRANSFER`, consensus `1784948578.536709104`, transfers `0.0.9697053 −0.50000000` / `0.0.9696085 +0.50000000`, fee `0.00283122` charged to the facilitator `0.0.7162784`. Link for the demo: https://hashscan.io/testnet/transaction/0.0.7162784-1784948570-524376611
+**On "shows up on HashScan":** verified through the **mirror node REST API** (`/api/v1/transactions/0.0.7162784-1784948570-524376611`), which is the exact data source HashScan renders. The HashScan page itself could not be machine-checked from here — `hashscan.io` returns HTTP 404 to non-browser clients for *every* path, including its own root, and no browser tooling was available in this session. **Open the link in a browser once before the demo** to be sure the page renders.
+**What the next person should do:** Phase 4.1 — the seller AgentCard (`@a2a-js/sdk`, already installed).
+**Known issues / things to watch for:** Buyer balance is now **999 ℏ** after two paid runs at 0.5 ℏ each; plenty left, but every future end-to-end run costs another 0.5 ℏ. Nothing about the payment layer is mocked — the only mocked piece is the *data* behind it (`MockDataProvider`, replaced in Phase 6).
 
 ### 2026-07-25 — Emre — Claude Code session (12d)
 **Completed:** Phase 3.4 — **the project's first real autonomous payment has settled on Hedera testnet**
