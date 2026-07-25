@@ -12,6 +12,8 @@ Phase/prompt numbers match `prompt-list.md` exactly. For full prompt text, refer
 **Last updated by:** Emre (Claude session)
 **Last updated on:** 2026-07-25
 
+> **Session 40:** Phase 7 re-verified end to end with `npm run verify:phase7` — **24/24**, proving the flow is repeatable (every counter increases by exactly one per run) and every failure mode is survivable. `scripts/full-e2e-test.ts` had been failing 16/17 since session 36 and is fixed, now **18/18**.
+>
 > **Out-of-phase fix, session 39:** the paid x402 endpoint now enforces the negotiation (it previously sold any cohort to anyone holding the price, bypassing the policy gate), and completing a sale is idempotent. See the session-39 handoff entry — it also lists the audit findings still open, including **`npm run test:e2e` currently failing 16/17**.
 
 ---
@@ -106,6 +108,22 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **What the next person should do:** ...
 **Known issues / things to watch for:** ...
 ```
+
+### 2026-07-25 — Emre — Claude Code session (40)
+**Completed:** Phase 7 **end-of-phase checkpoint**, and the fix to `full-e2e-test.ts` that was blocking it.
+**Files changed:** `scripts/verify-phase7.ts` (**new**). `scripts/full-e2e-test.ts` — the stale "no new query row" assertion **replaced**; `countQueries()` → `countCompleted()`. `package.json` — `npm run verify:phase7`.
+**The blocker, fixed:** `full-e2e-test.ts:157` asserted that a refusal leaves "no new query row", which `recordDecline` invalidated in session 36 — the suite had been failing **16/17** since then, unnoticed because nobody re-ran it. A checkpoint script that wraps a broken assertion verifies nothing, so it had to go first. The truthful claim is now two checks: **no new *completed sale*** (money is what must be absent) and **the refusal is recorded as `declined`, for the owner only**. The suite is back to green at **18/18**.
+**Verification:** `npx tsc --noEmit` clean. `npm run verify:phase7` → **24/24**, two real purchases (1 ℏ).
+- *Repeatability (12/12).* Both runs exited 0 at 18/18, and every counter was checked independently from Hedera and the ledger: completed sales **2→3→4**, HCS sequence **9→10→11**, reputation feedback **7→8→9**. Asserted `> before` **and** exactly `+1` per run — flat is a failure here, since it would mean the second sale overwrote the first instead of being appended. Each run's newest row carries its own distinct payment tx (`…1784977450.368324285` for run 2).
+- *Failure safety (12/12).* Four bad agent ids return a verdict rather than throwing; insufficient balance is caught pre-signature with the funding link; an unreachable endpoint and a **real** timeout against a black-hole server are both diagnosable; an empty policy is rejected before any model call; and the session-39 binding holds against genuinely settled state — a direct un-negotiated request → 403 `negotiation_required`, replaying completed negotiation #10 → 403 `negotiation_not_open`.
+**What the next person should do:** Phase 9.2 — the bonus requirement coverage table. Phase 7 is now verified as repeatable, which is the claim worth making in it.
+**Known issues / things to watch for:**
+- **Each `npm run verify:phase7` costs 1 ℏ and moves three counters permanently.** It reads its own baseline and asserts on deltas, so it stays correct across runs, but it is not free and not idempotent. Buyer balance is now ~992 ℏ.
+- **The delta checks poll instead of sleeping.** `waitForIncrease` retries for up to 60 s, because the mirror node lagging is not the same as a write never happening — a fixed sleep reports the first as the second. A genuine absence still fails, just 60 s later.
+- The e2e suite runs as a **subprocess** (`spawn npx tsx`, `shell: true` for Windows `.cmd` resolution). It binds 4000 and 4021, so the checkpoint must not hold those ports; it only starts its own x402 server in part 2, after both runs are done.
+- `isMeaningful()` is a deliberately crude guard — ≥25 characters and not `[object Object]`/`undefined`. It catches a message that says nothing; it cannot judge whether the message is *right*.
+- Part 2's replay check depends on there being a completed sale in the ledger, which part 1 guarantees. Running `failureModes()` alone against an empty ledger would skip that assertion's premise.
+- Still open from the session-39 audit list: **`allowedDataTypes` parsed and displayed but never enforced**; the earnings total sums the negotiated price rather than the 0.5 ℏ actually charged; `npm test` fails outright (`vitest`, no test files); the README's false claim that `create-audit-topic.ts` refuses to run twice; runtime deps sitting in `devDependencies` and `@langchain/openai` unimported.
 
 ### 2026-07-25 — Emre — Claude Code session (39)
 **Completed:** Not a numbered prompt — a **security fix found by auditing the whole repo**, plus its test.

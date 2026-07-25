@@ -135,7 +135,10 @@ Run the demo with **`npm run dev`**, not three separate terminals: the policy li
 npm run test:e2e       # full flow, both an accepted and a refused offer  (costs 0.5 ℏ)
 npm run test:errors    # network failure, timeout, insufficient balance, bad agent ids  (costs nothing)
 npm run test:binding   # the endpoint serves only what was negotiated, once  (costs 0.5 ℏ)
+npm run verify:phase7  # runs the full flow twice, then every failure mode  (costs 1 ℏ)
 ```
+
+`verify:phase7` is the checkpoint that a single passing run cannot substitute for: it runs the whole end-to-end suite **twice** and confirms independently — from the mirror node, the ReputationRegistry and the ledger — that the completed-sale count, the HCS sequence and the feedback count each go up by exactly one per run. A counter that stays flat fails, because it would mean the second sale overwrote the first instead of being appended.
 
 `test:e2e` asserts on real state: the payment settles, the HCS topic sequence increases by one, the reputation count increases by one, and the ledger row becomes `completed` — while the refused offer leaves **no** payment, **no** HCS entry, **no** feedback and **no** ledger row.
 

@@ -77,10 +77,15 @@ function latestQuery(): QueryRow | undefined {
   }
 }
 
-function countQueries(): number {
+/** Sales the owner was actually paid for — the only rows that mean money. */
+function countCompleted(): number {
   const db = openDatabase();
   try {
-    return (db.prepare("SELECT COUNT(*) AS n FROM queries").get() as { n: number }).n;
+    return (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM queries WHERE status = 'completed'")
+        .get() as { n: number }
+    ).n;
   } finally {
     db.close();
   }
@@ -138,7 +143,7 @@ async function scenarioRejected(): Promise<void> {
 
   const beforeHcs = await hcsSequence();
   const beforeFeedback = await feedbackCount();
-  const beforeQueries = countQueries();
+  const beforeCompleted = countCompleted();
 
   const result = await negotiateAndPurchase({ category: "swimming" }, 0.9, {
     onStep: (message) => console.log(`  ${message}`),
@@ -150,11 +155,18 @@ async function scenarioRejected(): Promise<void> {
   record("no payment was attempted", result.purchase === undefined);
   record("no payment instruction issued", result.negotiation.payment === undefined);
 
-  // Nothing should have been written anywhere by a refusal.
+  // A refusal writes nothing on-chain and charges nothing. It *is* recorded in
+  // the owner's own ledger as a decline (session 36) — "what your agent turned
+  // down on your behalf" — so the absence to assert on is a completed sale,
+  // not a ledger row.
   await new Promise((resolve) => setTimeout(resolve, 3_000));
   record("no new HCS audit entry", (await hcsSequence()) === beforeHcs);
   record("no new reputation feedback", (await feedbackCount()) === beforeFeedback);
-  record("no new query row", countQueries() === beforeQueries);
+  record("no new completed sale", countCompleted() === beforeCompleted);
+  record(
+    "the refusal is recorded as declined, for the owner only",
+    latestQuery()?.status === "declined",
+  );
 }
 
 async function main(): Promise<void> {

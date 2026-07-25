@@ -9,6 +9,7 @@
     "test:e2e": "tsx scripts/full-e2e-test.ts",
     "test:errors": "tsx scripts/test-error-cases.ts",
     "test:binding": "tsx scripts/test-payment-binding.ts",
+    "verify:phase7": "tsx scripts/verify-phase7.ts",
     "web": "tsx src/web/server.ts",
     "dev": "tsx src/dev-server.ts"
   },
