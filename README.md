@@ -143,6 +143,12 @@ throwaway third account precisely so the royalty cannot be confused with money m
 two demo accounts. The resale is a **separate verification, not a beat in the demo flow** — nothing
 in the negotiation path resells anything.
 
+**Every certificate the demo issues carries this royalty.** `HTS_LICENCE_TOKEN_ID` points at the
+royalty-bearing collection, so the NFT a buyer walks away with in beat 2 is the same one that would
+pay the artist on resale — not a royalty-free lookalike. Check it the way a sceptic would: take the
+certificate serial off the panel's Licences-sold row and look the token up on the mirror node —
+`custom_fees.royalty_fees` must be non-empty on the collection that holds it.
+
 ---
 
 ## Setup

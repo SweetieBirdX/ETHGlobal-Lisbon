@@ -119,6 +119,21 @@ Add an entry here at the end of every session/work block (newest on top). Format
 **Known issues / things to watch for:** ...
 ```
 
+### 2026-07-26 — Emre — Claude Code session (52) — royalty collection wired in, catalogue reset for filming
+**Completed:** the live minting path now points at the **royalty-bearing** certificate collection, the catalogue was reset for a clean filming state, and the whole suite plus a panel purchase were re-verified against it.
+**The gap this closed:** `verify:royalty` had proven a 5% royalty on `0.0.9756726`, but `.env` still pointed `HTS_LICENCE_TOKEN_ID` at the **old, royalty-free** `0.0.9750472` — so every certificate the demo actually issued had `royalty_fees: []`. The docs read as though the demo's certificates carried the royalty; they did not. Found while verifying the panel's haggle path, where a fresh certificate landed in the wrong collection.
+**Steps 1–2 were already done when this session started** — `.env` line 13 read `0.0.9756726` and the buyer `0.0.9697053` was already associated (mirror node: balance 5). Re-associating would have failed `TOKEN_ALREADY_ASSOCIATED_TO_ACCOUNT`, so both were verified rather than repeated.
+**Files changed:** `README.md` — a paragraph making the wiring explicit and checkable ("every certificate the demo issues carries this royalty", plus how a sceptic verifies it from a panel serial). `docs/bounty-coverage.md` — the royalty row now distinguishes *the collection the demo mints into* (royalty-bearing) from *the resale that triggers the fee* (separate script). `.env` and `catalogue.db` are gitignored, so the wiring itself does not travel with this commit — **a teammate must set `HTS_LICENCE_TOKEN_ID=0.0.9756726` in their own `.env` and associate their buyer**.
+**Verification:**
+- **Catalogue reset** — `catalogue.db` deleted and reseeded: 7 tracks, empty ledger, prices byte-identical to before (deterministic PRNG), track 3 back to its 800/10000 availability-refusal setup.
+- **Full sweep, all green:** `test:catalog` 25/25 · `test:errors` 18/18 · `test:identity` 33/33 · `test:e2e` 22/22 · `test:rounds` 22/22 · `npx tsc --noEmit` exit 0.
+- **Panel purchase** (through `/api/negotiate`, the same route the browser's Send offer button calls): licence #13, payment `0.0.7162784@1785034665.514637216`, certificate **#12**.
+- **Mirror node confirms the collection**: serial 12 of **`0.0.9756726`** is held by the buyer, created `1785034678` — 13 s after the payment — metadata `{"t":1,"sh":500,"l":"sync","hcs":712}`. That collection carries `royalty_fees: [5/100 → 0.0.9696085, fallback null]`, supply 12.
+**Known issues / things to watch for:**
+- **The ledger is NOT clean for filming.** The requested order was reset → sweep → panel purchase, and the sweep settles licences, so filming would start on a populated ledger (13 licences, track 1 at 8500/10000 after the purchase). If a clean start matters, delete `catalogue.db` and re-run `scripts/seed-catalog.ts` **after** the verification, immediately before recording — the proof above does not need to survive.
+- **Serial numbers now collide across the two collections.** `0.0.9750472` and `0.0.9756726` both contain a serial 12, minted hours apart. `licences.certificate_serial` stores only the number, so any link built from an *old* ledger row would resolve against the new collection and show the wrong NFT. The reset removes every old row, which is why no special handling was needed — but do not resurrect an old `catalogue.db`.
+- The old collection `0.0.9750472` still exists on testnet with 21 certificates. Nothing points at it any more.
+
 ### 2026-07-26 — Emre — Claude Code session (51) — demo policy floor aligned with the real catalogue
 **Completed:** `DEFAULT_POLICY_STATEMENT`'s minimum price per share lowered **0.001 → 0.0008 ℏ**, so an offer at a track's own quoted price clears the policy on *every* track rather than on the expensive ones only.
 **The measurement that drove it** — read straight off the `tracks` table, because the range quoted in the request (0.00005–0.0002 ℏ) was stale:
