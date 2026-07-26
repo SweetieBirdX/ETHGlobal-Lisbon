@@ -94,15 +94,6 @@ export default function Reusable() {
           Swap the catalogue for compute, data, or any other priced resource — the same identity
           checks, policy enforcement, payment binding, and audit trail carry over unchanged.
         </p>
-
-        <div className="mt-8 rounded-xl border border-accent/25 border-l-2 border-l-accent-teal bg-accent/[0.07] p-5">
-          <p className="text-sm leading-relaxed text-white/80">
-            <strong className="text-white/95">This already happened.</strong> The project began as
-            a health-and-fitness data marketplace and moved to music rights without rewriting the
-            core — the negotiation, payment, identity and audit layers carried across intact. What
-            changed was the catalogue, the policy vocabulary, and what the certificate represents.
-          </p>
-        </div>
       </div>
     </section>
   );
