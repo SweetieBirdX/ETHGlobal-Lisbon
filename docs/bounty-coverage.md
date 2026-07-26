@@ -69,4 +69,5 @@ Cut for time under a 12-hour budget. Named here rather than left for a judge to 
 
 | Behaviour | Effect |
 |---|---|
+| A buyer must be associated with the certificate collection before it can receive one | `scripts/create-licence-token.ts` associates the demo buyer at creation. Any **additional** buyer would need its own association first; without it the sale still completes and the licence is granted, but the mint has nowhere to land and the panel's Licences-sold row shows `—` in the Certificate column |
 | The policy floor and the track quote are two separate knobs | The floor comes from the rights holder's sentence (`minPricePerShareHbar × shares`); the charge is the track's own rate (`quotePrice`). The seeded catalogue runs **0.00082–0.00198 ℏ per share** and the default floor is **0.0008**, deliberately under the cheapest track, so an offer at any track's own asking price clears. On a 5% licence on the cheapest track: 0.4 ℏ floor, 0.41 ℏ quote. Reseed with different prices and the floor must move with them |
