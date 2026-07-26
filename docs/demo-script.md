@@ -160,3 +160,23 @@ Point at the hint line under the form before clicking.
 - **Don't film across midnight.** Earnings timestamps render as `HH:MM` only.
 - **Beat 1's sentence is not optional set-dressing.** The panel ships with a working default policy, so the agent *will* trade before you touch the form — but its defaults are not the numbers the rest of this script assumes. Save the beat-1 sentence before recording beats 2–4, and re-save it if you re-record them out of order.
 - **Don't read the parsed JSON aloud field by field.** Point at it; the sentence above it is the story.
+
+---
+
+## Appendix — the royalty proof is not a beat
+
+The certificate collection carries a **5% royalty to the rights holder** on any onward sale. It is
+real and verified, but it is **deliberately not in the script above**: nothing in the negotiation
+flow resells a certificate, so there is nothing on the panel to point a camera at.
+
+It is proven separately by `npm run verify:royalty` (7/7), which delivers a certificate the normal
+way — no royalty, because no value rides along with the delivery — then resells it to a throwaway
+third account for 10 ℏ and confirms 0.5 ℏ reaching the rights holder:
+[`0.0.9697053-1785023666-767928814`](https://hashscan.io/testnet/transaction/0.0.9697053-1785023666-767928814).
+
+**If a judge asks "does the artist keep earning after the first sale?"** — that transaction is the
+answer, and the README's "The royalty, and why it has no fallback fee" section explains the design
+decision behind it. **If there is spare time at the end of the video**, it could become a short
+closing beat: show the HashScan `assessed_custom_fees` line, say *"the artist earns 5% every time
+this licence changes hands, enforced by the ledger, not by a contract we wrote."* Do not squeeze it
+in at the cost of the four beats above.

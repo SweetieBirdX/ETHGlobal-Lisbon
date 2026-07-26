@@ -108,10 +108,40 @@ A fourth gate sits at the money: the x402 endpoint refuses any request that no n
 | **HCS — attestation** | `src/identity/attestation.ts` | A `validation_request` / `validation_response` pair per negotiation, using the ERC-8004 ValidationRegistry's own field names on a consensus topic instead of a contract |
 | **HCS — reputation** | `src/identity/reputation.ts` | After a settled payment, feedback about the buyer, citing the transaction so the claim is checkable |
 | **HTS — tokens** | `src/hedera/certificate.ts` | The licence certificate NFT — **the product's on-chain half**, minted to whoever actually paid. Metadata `{"t":1,"sh":500,"l":"sync","hcs":376}` (36 bytes of a 100-byte cap) |
+| **HTS — royalty fee** | `scripts/create-licence-token.ts` | A **5% royalty to the rights holder** on any onward sale of a certificate, baked into the collection at creation with no fee schedule key, so the terms cannot be changed afterwards. Deliberately **no fallback fee** — see below |
 | **Mirror Node** | `src/hedera/mirror.ts`, `src/web/api.ts` | Every read: identity resolution, the audit panel, test assertions. The panel shows what Hedera recorded, not what the app believes happened |
 | **x402** | `src/x402/server.ts`, `pay.ts` | 402 → sign → 200. Priced **per licence** (`shares × the track's per-share rate`), never a flat route price |
 | **A2A** | `src/a2a/` | AgentCard discovery, real Task lifecycle, multi-round negotiation — a declined offer leaves the task `input-required`, so a counter-offer lands in the *same* conversation |
 | **Hedera Agent Kit** | `src/hedera/agentkit.ts` | `AgentMode.AUTONOMOUS` toolkit with the HCS audit-trail hook |
+
+### The royalty, and why it has no fallback fee
+
+A licence certificate carries a 5% royalty to the rights holder, so the artist keeps earning if a
+licence is resold. Hedera assesses that royalty only when an NFT changes hands **in exchange for
+fungible value inside a single transfer** — which produces a deliberate asymmetry here:
+
+- **Delivery charges nothing.** When a sale completes, the certificate moves treasury → buyer with
+  no HBAR alongside it; the licence was already paid for separately over x402. A *fallback fee*
+  would have been charged to the receiver on exactly that kind of value-free transfer, billing the
+  buyer a second time for a licence they had just bought. So there is no fallback fee.
+- **Resale pays the artist.** When the holder sells the certificate onward for HBAR, the ledger
+  takes 5% of the payment and routes it to the rights holder automatically.
+
+This is demonstrated, not merely configured. `npm run verify:royalty` performs both halves live and
+asserts the difference — **7/7**:
+
+```
+delivery  treasury → buyer, no value        → no royalty assessed
+resale    buyer → third account for 10 ℏ    → 0.5 ℏ to the rights holder
+```
+
+Proof transaction:
+[`0.0.9697053-1785023666-767928814`](https://hashscan.io/testnet/transaction/0.0.9697053-1785023666-767928814)
+— `assessed_custom_fees` shows `50000000` tinybar to `0.0.9696085`, charged to the account that
+received the payment. The rights holder was **not a party to that sale**; the script creates a
+throwaway third account precisely so the royalty cannot be confused with money moving between the
+two demo accounts. The resale is a **separate verification, not a beat in the demo flow** — nothing
+in the negotiation path resells anything.
 
 ---
 
@@ -189,9 +219,10 @@ npm run test:errors      # failure modes: bad ids, unreachable endpoints, empty 
 npm run test:identity    # the four identity checks against the live registry — 33 checks, HCS fees only
 npm run test:e2e         # full negotiation → payment → grant → chain — 22 checks, spends real HBAR
 npm run test:rounds      # multi-round haggle in one A2A task — 22 checks, spends real HBAR
+npm run verify:royalty   # the 5% royalty firing on a real resale — 7 checks, spends real HBAR
 ```
 
-All five counts were confirmed by running the suites. `test:e2e` and `test:rounds` make real testnet payments and append real HCS entries, so they are neither free nor idempotent — that is rather the point of them; each also takes shares out of a track's capacity permanently. `test:identity` writes real attestations (HCS fees, fractions of a cent) but buys nothing; `test:catalog` and `test:errors` spend nothing at all.
+All six counts were confirmed by running the suites. `test:e2e`, `test:rounds` and `verify:royalty` make real testnet payments and append real HCS entries, so they are neither free nor idempotent — that is rather the point of them; the first two also take shares out of a track's capacity permanently, and `verify:royalty` creates a throwaway account and mints a certificate outside the negotiation path. `test:identity` writes real attestations (HCS fees, fractions of a cent) but buys nothing; `test:catalog` and `test:errors` spend nothing at all.
 
 The most convincing check is the panel's fourth pane: it lists the audit trail pulled from the **mirror node**, the same source HashScan renders. Every entry can be verified independently of anything this app claims.
 

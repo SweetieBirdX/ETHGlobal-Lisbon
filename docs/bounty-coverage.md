@@ -44,6 +44,7 @@ What is genuinely wired up, what stands in for something else, and what is simpl
 | Reputation | ✅ | `src/identity/reputation.ts` | Feedback written to the identity topic after settlement, citing the payment transaction |
 | HCS audit trail | ✅ | `src/hedera/audit.ts` | Panel's audit pane reads it back off the mirror node |
 | HTS token creation | ✅ | `scripts/create-licence-token.ts` | "Music Licence Certificate" (MLIC), seller treasury + sole supply key, **no admin key — immutable** |
+| **HTS royalty fee schedule** | ✅ **demonstrated** | `scripts/create-licence-token.ts`, `scripts/verify-royalty.ts` | 5% to the rights holder, **no fallback fee**, baked in at creation with no fee schedule key so the terms cannot change. Proven live, not just configured: `npm run verify:royalty` → **7/7**, tx [`0.0.9697053-1785023666-767928814`](https://hashscan.io/testnet/transaction/0.0.9697053-1785023666-767928814) — 0.5 ℏ of a 10 ℏ resale routed to the rights holder, who was not a party to that trade. **Not part of the primary demo flow** |
 | Hedera Agent Kit, autonomous mode | ✅ | `src/hedera/agentkit.ts` | `AgentMode.AUTONOMOUS` + HCS audit-trail hook — `npx tsx scripts/test-agent-kit.ts` |
 | Natural-language policy | ✅ | `src/policy/parser.ts` | Groq `llama-3.3-70b-versatile`, `temperature: 0`, structured output, plus a whitelist filter so a hallucinated licence type can never widen what is sold |
 | Demo video | ❌ | — | Not yet filmed |
@@ -58,7 +59,7 @@ Cut for time under a 12-hour budget. Named here rather than left for a judge to 
 |---|---|---|
 | **UCP (Universal Commerce Protocol) discovery** | ❌ not attempted | Discovery today is the A2A AgentCard only. UCP would be a second discovery surface on top of a working one — additive points, non-trivial integration |
 | **Scheduled Transactions** | ❌ not attempted | Every payment here settles immediately, which is the whole point of the x402 flow. Scheduled transactions would suit a *deferred* or multi-signature licence settlement — a different product beat, not this one |
-| **HTS custom fee schedules / royalty fees** | ❌ not attempted | The natural fit: a royalty fee on the certificate NFT so the artist earns on secondary transfers. Genuinely attractive for a music project, and the honest reason it is absent is time plus the risk of a mis-set immutable fee schedule on a token we cannot change afterwards |
+| ~~**HTS custom fee schedules / royalty fees**~~ | ✅ **done after all** | Moved into the delivered table above. 5% royalty, no fallback fee, demonstrated by a real secondary sale. The one caveat kept honest: the resale is a **separate verification script**, not something the primary demo flow performs |
 | **Third-party validation** | ❌ by necessity, then by choice | The ERC-8004 ValidationRegistry **has no deployment on any chain** — the spec section is still under revision, so there was nothing to call. Our attestation is therefore **self-issued**: the seller attests the buyer against its own allow-list and writes the result to HCS using the registry's own field names. A real, public, tamper-evident record — but not independent verification |
 | **Persistent negotiations** | ❌ | `InMemoryTaskStore`: sessions do not survive a restart. Fine for a demo; a counter-offer to a restarted seller gets "Task not found" |
 
