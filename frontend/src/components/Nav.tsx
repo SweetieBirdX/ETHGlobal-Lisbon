@@ -8,9 +8,16 @@ export const NAV_ITEMS = [
   { label: 'Architecture', href: '#architecture' },
 ];
 
+/**
+ * The primary call to action, rendered by both the hero and the mobile menu.
+ *
+ * It points at the running demo panel, which is served by the backend on
+ * port 4100 — so `npm run dev` in the repo root has to be up for this link to
+ * land anywhere.
+ */
 export const CTA = {
   label: 'Dive In Action',
-  href: 'https://github.com/SweetieBirdX/ETHGlobal-Lisbon',
+  href: 'http://localhost:4100/',
 };
 
 export default function Nav() {
