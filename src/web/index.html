@@ -4,25 +4,45 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Your music, your terms</title>
+    <!-- Same three families the landing page loads, so the two pages set type
+         identically. Every stack below falls back to system fonts if the CDN
+         is unreachable — the panel must still be legible offline. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <style>
+      /* Palette and type are taken from the landing page (frontend/src/index.css
+         and its sections) so the panel reads as the same product: deep indigo
+         ground, violet brand, teal for "this happened", pink for "this was
+         refused". The variable names are unchanged from the previous skin —
+         only their values moved — so every rule below kept working as-is. */
       :root {
         color-scheme: dark;
-        --bg: #0c0f14;
-        --panel: #141922;
-        --panel-2: #1b2130;
-        --line: #262e3d;
-        --text: #e6ebf2;
-        --muted: #8b97a8;
-        /* Brand: Hedera purple. Change this one value to re-skin the panel. */
-        --brand: #8259ef;
-        --brand-hover: #9370f2;
-        --brand-ink: #f3efff;
-        /* Semantics stay conventional — green reads as "accepted", not "brand". */
-        --accent: #4ade80;
-        --accent-dim: #1c3a2a;
-        --danger: #f87171;
-        --danger-dim: #3a1f22;
+        --bg: #0d0b27;
+        /* Panels are a violet wash over the ground rather than a lighter grey,
+           which is what gives the landing page its depth without hard edges. */
+        --panel: rgba(110, 86, 207, 0.05);
+        --panel-2: rgba(110, 86, 207, 0.09);
+        --line: rgba(110, 86, 207, 0.22);
+        --text: #ffffff;
+        --muted: rgba(255, 255, 255, 0.55);
+        --brand: #6e56cf;
+        --brand-hover: #8b74e8;
+        --brand-ink: #ffffff;
+        --brand-pink: #e84393;
+        /* Semantics follow the landing page's checklist marks: teal = done,
+           pink = refused, amber = in flight. */
+        --accent: #00cec9;
+        --accent-dim: rgba(0, 206, 201, 0.12);
+        --danger: #e84393;
+        --danger-dim: rgba(232, 67, 147, 0.14);
         --warn: #fbbf24;
+        --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-serif: "Instrument Serif", Georgia, serif;
+        --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
         /* One knob for the 2×2 grid: every panel is capped to this, so the four
            cells stay aligned and each panel scrolls its own data instead of
            stretching the page. */
@@ -33,55 +53,81 @@
         margin: 0;
         background: var(--bg);
         color: var(--text);
-        font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        font: 15px/1.55 var(--font-sans);
+        -webkit-font-smoothing: antialiased;
       }
+      /* The two radial washes the landing sections use, fixed so they light the
+         page rather than scrolling out of it. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        pointer-events: none;
+        background:
+          radial-gradient(900px 460px at 15% -5%, rgba(110, 86, 207, 0.20), transparent 65%),
+          radial-gradient(800px 420px at 88% 8%, rgba(232, 67, 147, 0.12), transparent 65%);
+      }
+      /* Panels scroll their own data, so the bars are visible often — keep them
+         in the palette instead of letting the OS pick grey. */
+      * { scrollbar-width: thin; scrollbar-color: rgba(110, 86, 207, 0.5) transparent; }
+      *::-webkit-scrollbar { width: 8px; height: 8px; }
+      *::-webkit-scrollbar-thumb {
+        background: rgba(110, 86, 207, 0.5);
+        border-radius: 999px;
+      }
+      *::-webkit-scrollbar-thumb:hover { background: rgba(110, 86, 207, 0.75); }
+      *::-webkit-scrollbar-track { background: transparent; }
       header {
-        border-bottom: 1px solid var(--line);
-        padding: 20px 24px;
+        border-bottom: 1px solid rgba(110, 86, 207, 0.18);
+        padding: 26px 32px;
         display: flex;
         flex-wrap: wrap;
-        gap: 12px;
+        gap: 16px;
         align-items: baseline;
         justify-content: space-between;
       }
       h1 {
-        font-size: 18px;
+        font-family: var(--font-serif);
+        font-size: 30px;
+        font-weight: 400;
+        line-height: 1.1;
         margin: 0;
         letter-spacing: -0.01em;
+      }
+      .agents b.net { color: var(--accent); }
+      /* Panel headings mirror the landing page's section eyebrows: mono, small,
+         wide-tracked, teal. */
+      h2 {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        color: var(--accent);
+        margin: 0 0 16px;
+        font-weight: 500;
         display: flex;
         align-items: center;
         gap: 10px;
       }
-      /* Mark: two linked squares — the two agents dealing directly. */
-      .mark {
-        width: 22px;
-        height: 22px;
-        border-radius: 6px;
-        background: linear-gradient(135deg, var(--brand) 0%, #b18cff 100%);
-        position: relative;
+      h2::before {
+        content: "";
+        width: 16px;
+        height: 1px;
+        background: var(--accent);
         flex: 0 0 auto;
       }
-      .mark::after {
-        content: "";
-        position: absolute;
-        inset: 6px 6px auto auto;
-        width: 8px;
-        height: 8px;
-        border-radius: 2px;
-        background: var(--bg);
-      }
-      .agents b.net { color: var(--brand-hover); }
-      h2 {
-        font-size: 12px;
-        text-transform: uppercase;
+      .sub { color: rgba(255, 255, 255, 0.7); font-size: 14px; margin: 8px 0 0; max-width: 60ch; }
+      .agents {
+        display: flex;
+        gap: 18px;
+        font-family: var(--font-mono);
+        font-size: 11px;
         letter-spacing: 0.08em;
-        color: var(--muted);
-        margin: 0 0 14px;
-        font-weight: 600;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.45);
       }
-      .sub { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
-      .agents { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
-      .agents b { color: var(--text); font-weight: 600; }
+      .agents b { color: var(--text); font-weight: 500; }
 
       /* 2×2: terms + live negotiation on top, licences + audit trail below.
          `stretch` is what makes the two panels in a row exactly as tall as each
@@ -89,17 +135,21 @@
       main {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 18px;
-        padding: 20px 24px 40px;
+        gap: 20px;
+        padding: 28px 32px 48px;
         align-items: stretch;
       }
       @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+      @media (max-width: 640px) {
+        header { padding: 22px 20px; }
+        main { padding: 20px 20px 36px; }
+      }
 
       .panel {
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 18px;
+        border-radius: 16px;
+        padding: 24px;
       }
       .col { display: flex; flex-direction: column; gap: 18px; }
 
@@ -120,30 +170,58 @@
       /* The sales table scrolls in both directions — it is the widest content. */
       .table-wrap { overflow: auto; }
 
-      label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+      label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 7px; }
       textarea, input, select {
         width: 100%;
         background: var(--panel-2);
         border: 1px solid var(--line);
         color: var(--text);
-        border-radius: 7px;
-        padding: 10px 12px;
+        border-radius: 10px;
+        padding: 11px 13px;
         font: inherit;
         resize: vertical;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
       }
-      textarea:focus, input:focus, select:focus { outline: 2px solid var(--brand); border-color: transparent; }
+      textarea::placeholder, input::placeholder { color: rgba(255, 255, 255, 0.3); }
+      textarea:focus, input:focus, select:focus {
+        outline: none;
+        border-color: rgba(0, 206, 201, 0.7);
+        box-shadow: 0 0 0 3px rgba(0, 206, 201, 0.14);
+      }
+      /* The primary action carries the landing page's CTA gradient, pill shape
+         and glow; the shift to pink on hover is the same motion. */
       button {
-        background: var(--brand);
+        background: linear-gradient(100deg, var(--brand) 0%, var(--brand-pink) 55%, var(--brand) 100%);
+        background-size: 200% 100%;
+        background-position: 0% 0%;
         color: var(--brand-ink);
         border: 0;
-        border-radius: 7px;
-        padding: 10px 16px;
-        font: 600 14px/1 inherit;
+        border-radius: 999px;
+        padding: 11px 22px;
+        font: 600 14px/1 var(--font-sans);
+        letter-spacing: 0.01em;
         cursor: pointer;
+        box-shadow: 0 0 34px -12px rgba(110, 86, 207, 0.95);
+        transition: background-position 0.5s ease, box-shadow 0.3s ease, transform 0.2s ease;
       }
-      button:hover:not(:disabled) { background: var(--brand-hover); }
-      button:disabled { opacity: 0.5; cursor: not-allowed; }
-      button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+      button:hover:not(:disabled) {
+        background-position: 100% 0%;
+        box-shadow: 0 0 40px -10px rgba(232, 67, 147, 0.7);
+        transform: translateY(-1px);
+      }
+      button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+      button.secondary {
+        background: rgba(110, 86, 207, 0.10);
+        color: rgba(255, 255, 255, 0.85);
+        border: 1px solid var(--line);
+        box-shadow: none;
+        font-weight: 500;
+      }
+      button.secondary:hover:not(:disabled) {
+        background: rgba(110, 86, 207, 0.18);
+        color: var(--text);
+        transform: none;
+      }
       .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
       .row > * { flex: 1 1 120px; }
       .actions { display: flex; gap: 10px; margin-top: 14px; }
@@ -152,10 +230,10 @@
         margin-top: 14px;
         background: var(--panel-2);
         border: 1px solid var(--line);
-        border-radius: 7px;
-        padding: 12px;
-        font: 12px/1.6 ui-monospace, "Cascadia Code", Consolas, monospace;
-        color: var(--muted);
+        border-radius: 12px;
+        padding: 14px;
+        font: 12px/1.6 var(--font-mono);
+        color: rgba(255, 255, 255, 0.6);
         white-space: pre-wrap;
         word-break: break-word;
       }
@@ -163,71 +241,90 @@
       /* Height comes from the capped panel now, not from a fixed max-height:
          entries list downwards and the pane starts scrolling once it is full. */
       .log {
-        font: 12.5px/1.7 ui-monospace, "Cascadia Code", Consolas, monospace;
+        font: 12.5px/1.7 var(--font-mono);
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 7px;
       }
       .entry {
         display: grid;
         grid-template-columns: 62px 1fr;
         gap: 10px;
-        padding: 7px 10px;
-        border-radius: 6px;
+        padding: 9px 12px;
+        border-radius: 10px;
         background: var(--panel-2);
         border-left: 2px solid var(--line);
       }
-      .entry time { color: var(--muted); }
-      .entry.accept { border-left-color: var(--accent); }
-      .entry.decline { border-left-color: var(--danger); }
-      .entry.payment { border-left-color: var(--warn); }
-      .entry .who { color: var(--muted); }
+      .entry time { color: rgba(255, 255, 255, 0.4); }
+      .entry.accept { border-left-color: var(--accent); background: rgba(0, 206, 201, 0.07); }
+      .entry.decline { border-left-color: var(--danger); background: rgba(232, 67, 147, 0.07); }
+      .entry.payment { border-left-color: var(--warn); background: rgba(251, 191, 36, 0.07); }
+      .entry .who { color: rgba(255, 255, 255, 0.45); }
       .empty { color: var(--muted); font-size: 13px; padding: 18px 0; text-align: center; }
 
       .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
       .stat {
-        background: var(--panel-2);
+        background: rgba(110, 86, 207, 0.06);
         border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 12px 14px;
+        border-radius: 14px;
+        padding: 14px 16px;
       }
-      .stat .value { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; }
-      .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+      /* The landing page sets every large number in the serif — the stat tiles
+         in "Read from the running system" look exactly like this. */
+      .stat .value {
+        font-family: var(--font-serif);
+        font-size: 30px;
+        font-weight: 400;
+        line-height: 1.1;
+        letter-spacing: -0.01em;
+      }
+      .stat .label {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.45);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin-top: 6px;
+      }
       .stat.earn .value { color: var(--accent); }
 
-      table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
       th {
         text-align: left;
-        font-size: 11px;
+        font-family: var(--font-mono);
+        font-size: 10px;
         text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
-        font-weight: 600;
+        letter-spacing: 0.1em;
+        color: rgba(255, 255, 255, 0.45);
+        font-weight: 500;
         padding: 8px 10px;
         border-bottom: 1px solid var(--line);
       }
-      td { padding: 9px 10px; border-bottom: 1px solid var(--line); }
+      td { padding: 10px; border-bottom: 1px solid rgba(110, 86, 207, 0.14); }
       tr:last-child td { border-bottom: 0; }
       .track-cell { font-weight: 600; }
       .track-cell small { display: block; font-weight: 400; color: var(--muted); }
       .pill {
         display: inline-block;
-        padding: 2px 8px;
+        padding: 3px 10px;
         border-radius: 999px;
-        font-size: 11px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
         font-weight: 600;
       }
       .pill.completed { background: var(--accent-dim); color: var(--accent); }
       .pill.declined { background: var(--danger-dim); color: var(--danger); }
-      .pill.accepted { background: #2a2f1f; color: var(--warn); }
-      a { color: var(--brand-hover); }
-      a:hover { color: var(--brand-ink); }
+      .pill.accepted { background: rgba(251, 191, 36, 0.14); color: var(--warn); }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
       .status { font-size: 12px; color: var(--muted); min-height: 18px; }
       .status.error { color: var(--danger); }
       .declines { font-size: 12px; color: var(--muted); margin: 12px 0 0; line-height: 1.6; }
-      .hint { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+      .hint { font-size: 12px; color: rgba(255, 255, 255, 0.45); margin: 10px 0 0; }
 
-      .audit { display: flex; flex-direction: column; gap: 6px; }
+      .audit { display: flex; flex-direction: column; gap: 7px; }
       .audit-entry {
         display: grid;
         grid-template-columns: 34px 1fr;
@@ -235,20 +332,20 @@
         background: var(--panel-2);
         border: 1px solid var(--line);
         border-left-width: 2px;
-        border-radius: 6px;
-        padding: 8px 10px;
-        font: 12px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+        border-radius: 10px;
+        padding: 9px 12px;
+        font: 12px/1.5 var(--font-mono);
       }
       .audit-entry.json { border-left-color: var(--accent); }
-      .audit-entry.text { border-left-color: #5b6b85; }
-      .audit-entry .seq { color: var(--muted); }
-      .audit-entry .when { color: var(--muted); font-size: 11px; }
+      .audit-entry.text { border-left-color: rgba(110, 86, 207, 0.7); }
+      .audit-entry .seq { color: rgba(255, 255, 255, 0.4); }
+      .audit-entry .when { color: rgba(255, 255, 255, 0.4); font-size: 11px; margin-top: 2px; }
     </style>
   </head>
   <body>
     <header>
       <div>
-        <h1><span class="mark" aria-hidden="true"></span>Your music, your terms</h1>
+        <h1>Your music, your terms</h1>
         <p class="sub">
           Your agent licenses your tracks on your behalf. You set the terms once — no deal asks for your approval.
         </p>
