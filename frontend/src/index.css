@@ -1,0 +1,90 @@
+@import 'tailwindcss';
+
+@theme {
+  --breakpoint-xs: 400px;
+  --font-mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+  --color-accent: #6e56cf;
+  --color-accent-pink: #e84393;
+  --color-accent-teal: #00cec9;
+}
+
+/* Self-hosted Helvetica Neue Roman — drop the actual woff2/woff files into
+   /public/fonts/ to activate this. Falls back gracefully to Inter/system
+   sans until then, so nothing breaks without the licensed font files. */
+@font-face {
+  font-family: 'Helvetica Neue Roman';
+  src:
+    url('/fonts/HelveticaNeueRoman.woff2') format('woff2'),
+    url('/fonts/HelveticaNeueRoman.woff') format('woff');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+* {
+  font-family: 'Inter', sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #0d0b27;
+}
+
+#root {
+  min-height: 100%;
+}
+
+.font-helvetica-neue {
+  font-family: 'Helvetica Neue Roman', 'Inter', sans-serif;
+}
+
+.font-instrument-serif {
+  font-family: 'Instrument Serif', serif;
+}
+
+body.menu-open {
+  overflow: hidden;
+}
+
+/* Registered in the components layer so it sits *below* Tailwind's
+   utilities layer in the cascade — without this, .liquid-glass's own
+   `position: relative` would always beat a combined `absolute` utility,
+   since unlayered/mis-layered CSS outranks layered CSS regardless of
+   specificity or source order. */
+@layer components {
+  .liquid-glass {
+    background: rgba(255, 255, 255, 0.01);
+    background-blend-mode: luminosity;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border: none;
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .liquid-glass::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1.4px;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.45) 0%,
+      rgba(255, 255, 255, 0.15) 20%,
+      rgba(255, 255, 255, 0) 40%,
+      rgba(255, 255, 255, 0) 60%,
+      rgba(255, 255, 255, 0.15) 80%,
+      rgba(255, 255, 255, 0.45) 100%
+    );
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+}
