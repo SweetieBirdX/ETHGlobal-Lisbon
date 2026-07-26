@@ -45,7 +45,7 @@ What is genuinely wired up, what stands in for something else, and what is simpl
 | HCS audit trail | ✅ | `src/hedera/audit.ts` | Panel's audit pane reads it back off the mirror node |
 | HTS token creation | ✅ | `scripts/create-licence-token.ts` | "Music Licence Certificate" (MLIC), seller treasury + sole supply key, **no admin key — immutable** |
 | **HTS royalty fee schedule** | ✅ **demonstrated** | `scripts/create-licence-token.ts`, `scripts/verify-royalty.ts` | 5% to the rights holder, **no fallback fee**, baked in at creation with no fee schedule key so the terms cannot change. Proven live, not just configured: `npm run verify:royalty` → **7/7**, tx [`0.0.9697053-1785023666-767928814`](https://hashscan.io/testnet/transaction/0.0.9697053-1785023666-767928814) — 0.5 ℏ of a 10 ℏ resale routed to the rights holder, who was not a party to that trade. **Not part of the primary demo flow** |
-| Hedera Agent Kit, autonomous mode | ✅ | `src/hedera/agentkit.ts` | `AgentMode.AUTONOMOUS` + HCS audit-trail hook — `npx tsx scripts/test-agent-kit.ts` |
+| Hedera Agent Kit, autonomous mode | ✅ | `src/hedera/agentkit.ts` | `AgentMode.AUTONOMOUS` + HCS audit-trail hook — demonstrated by `npx tsx scripts/test-agent-kit.ts`; the negotiation path uses the SDK directly |
 | Natural-language policy | ✅ | `src/policy/parser.ts` | Groq `llama-3.3-70b-versatile`, `temperature: 0`, structured output, plus a whitelist filter so a hallucinated licence type can never widen what is sold |
 | Demo video | ❌ | — | Not yet filmed |
 

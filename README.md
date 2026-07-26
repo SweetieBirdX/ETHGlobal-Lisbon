@@ -112,7 +112,7 @@ A fourth gate sits at the money: the x402 endpoint refuses any request that no n
 | **Mirror Node** | `src/hedera/mirror.ts`, `src/web/api.ts` | Every read: identity resolution, the audit panel, test assertions. The panel shows what Hedera recorded, not what the app believes happened |
 | **x402** | `src/x402/server.ts`, `pay.ts` | 402 → sign → 200. Priced **per licence** (`shares × the track's per-share rate`), never a flat route price |
 | **A2A** | `src/a2a/` | AgentCard discovery, real Task lifecycle, multi-round negotiation — a declined offer leaves the task `input-required`, so a counter-offer lands in the *same* conversation |
-| **Hedera Agent Kit** | `src/hedera/agentkit.ts` | `AgentMode.AUTONOMOUS` toolkit with the HCS audit-trail hook |
+| **Hedera Agent Kit** | `src/hedera/agentkit.ts` | `AgentMode.AUTONOMOUS` toolkit with the HCS audit-trail hook — demonstrated by `scripts/test-agent-kit.ts`; the negotiation path uses the SDK directly |
 
 ### The royalty, and why it has no fallback fee
 
