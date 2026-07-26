@@ -11,6 +11,7 @@
     "test:identity": "tsx scripts/test-identity.ts",
     "test:catalog": "tsx scripts/test-catalog.ts",
     "test:rounds": "tsx scripts/test-multiround.ts",
+    "verify:royalty": "tsx scripts/verify-royalty.ts",
     "web": "tsx src/web/server.ts",
     "dev": "tsx src/dev-server.ts"
   },
