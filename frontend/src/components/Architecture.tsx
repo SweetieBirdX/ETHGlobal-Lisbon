@@ -23,8 +23,8 @@ const RESOURCES = [
   { k: 'HCS audit topic', v: 'configured via HCS_AUDIT_TOPIC_ID' },
   {
     k: 'Repository',
-    v: 'github.com/SweetieBirdX/ETHGlobal-Lisbon ↗',
-    href: 'https://github.com/SweetieBirdX/ETHGlobal-Lisbon',
+    v: 'github.com/SweetieBirdX/Kinora ↗',
+    href: 'https://github.com/SweetieBirdX/Kinora',
   },
 ];
 

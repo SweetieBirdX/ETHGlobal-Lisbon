@@ -10,7 +10,7 @@ export default function Footer() {
         </a>
         <div className="flex flex-wrap items-center gap-6">
           <a
-            href="https://github.com/SweetieBirdX/ETHGlobal-Lisbon"
+            href="https://github.com/SweetieBirdX/Kinora"
             target="_blank"
             rel="noopener"
             className="text-sm text-white/65 transition-colors hover:text-accent-teal"

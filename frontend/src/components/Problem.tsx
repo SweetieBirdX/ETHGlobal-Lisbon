@@ -1,5 +1,21 @@
 import SectionHeading from './SectionHeading';
 
+/** The three failures, one line each — the summary before the detail below. */
+const PAIN_POINTS = [
+  {
+    title: 'Slow',
+    line: 'A licence takes weeks of email, drafting and review before anyone can use the track.',
+  },
+  {
+    title: 'Opaque',
+    line: 'Terms and prices are private, so neither side knows what a fair deal even looks like.',
+  },
+  {
+    title: "Doesn't scale",
+    line: 'The overhead is fixed, so any deal too small to be worth a lawyer simply never happens.',
+  },
+];
+
 const TODAY_STEPS = [
   'Email the rights holder and wait',
   'Negotiate terms by hand',
@@ -36,6 +52,18 @@ export default function Problem() {
           title="Licensing music at micro scale is slow, manual, and lawyer-heavy."
           intro="Clearing rights today doesn't scale down. Small creators can't license legally, and rights holders lose long-tail revenue on the deals too small to be worth a lawyer's time."
         />
+
+        <div className="mt-12 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {PAIN_POINTS.map((point) => (
+            <div
+              key={point.title}
+              className="liquid-glass rounded-2xl border border-accent/20 bg-accent/[0.04] p-6"
+            >
+              <h3 className="font-instrument-serif text-2xl text-white">{point.title}</h3>
+              <p className="mt-2.5 text-sm leading-relaxed text-white/65">{point.line}</p>
+            </div>
+          ))}
+        </div>
 
         <div className="mt-14 grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto_1fr] md:items-stretch">
           <div className="liquid-glass rounded-2xl border border-accent/15 bg-accent/[0.03] p-7">

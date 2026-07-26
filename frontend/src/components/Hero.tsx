@@ -42,9 +42,28 @@ export default function Hero() {
 
         {/* Layer 3 — hero text + primary CTA, nudged right of center on desktop */}
         <div className="absolute inset-x-0 top-20 z-20 flex flex-col items-center px-4 sm:top-28 sm:px-8 md:top-32 md:items-start md:pl-10 lg:pl-20">
+          {/* Live badge — the dot pulses, so it reads as a status, not a label. */}
+          <span className="font-mono mb-4 inline-flex items-center gap-2 rounded-full border border-accent-teal/40 bg-accent-teal/10 px-3.5 py-1.5 text-[11px] tracking-[0.12em] text-accent-teal uppercase backdrop-blur-sm">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent-teal opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent-teal" />
+            </span>
+            Live on Hedera Testnet
+          </span>
+
           <h1 className="font-instrument-serif xs:text-[5.5rem] text-center text-[4.5rem] leading-[0.9] tracking-tight text-white md:text-left sm:text-[10rem] md:text-[13rem] lg:text-[16rem]">
             Kinora
           </h1>
+
+          <p className="font-instrument-serif mt-1 text-center text-2xl text-white/90 md:text-left sm:text-3xl md:text-4xl">
+            Your music, your terms.
+          </p>
+
+          <p className="mt-4 max-w-xl text-center text-sm leading-relaxed text-white/70 md:text-left sm:text-base">
+            Autonomous agents negotiate the licence, pay for it, and settle it on Hedera — identity
+            checked on the consensus service, HBAR moved over x402, a certificate NFT issued at the
+            end. No human approves any of it.
+          </p>
 
           <a
             href={CTA.href}
@@ -69,16 +88,13 @@ export default function Hero() {
           </a>
         </div>
 
-        {/* Tagline + one-liner, sitting in the empty lower-left of the hero */}
-        <div className="absolute inset-x-0 bottom-24 z-20 px-5 sm:bottom-28 sm:px-8 md:bottom-32">
-          <div className="max-w-[58%] xs:max-w-[62%] sm:max-w-md">
-            <p className="font-mono mb-3 text-xs tracking-[0.15em] text-white/50 uppercase">
-              Hedera · AI &amp; Agentic Payments
-            </p>
-            <p className="text-base leading-snug text-white/90 xs:text-lg sm:text-xl">
-              Set your policy once. Your agent does the deals. Hedera settles them.
-            </p>
-          </div>
+        {/* The track line that used to sit here moved into the block above, next
+            to the wordmark — two taglines in one viewport read as a mistake, and
+            the taller heading stack would have collided with it on short screens. */}
+        <div className="absolute inset-x-0 bottom-10 z-20 px-5 sm:px-8">
+          <p className="font-mono text-xs tracking-[0.15em] text-white/40 uppercase">
+            Hedera · AI &amp; Agentic Payments · No Solidity
+          </p>
         </div>
 
         {/* Layer 4 — overlay image: the crisp instrument cutout, always visible */}

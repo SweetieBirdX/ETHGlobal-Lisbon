@@ -51,6 +51,35 @@ const GATES = [
   },
 ];
 
+/** The whole path, end to end, before the gates are broken down individually. */
+const FLOW = [
+  {
+    step: '01',
+    title: 'Policy, in plain language',
+    detail: 'One sentence from the rights holder becomes machine-checkable rules.',
+  },
+  {
+    step: '02',
+    title: 'Offer submitted',
+    detail: "A buyer agent sends track, shares, licence type, territory, use case and price.",
+  },
+  {
+    step: '03',
+    title: 'Three gates',
+    detail: 'Identity, then policy, then availability. Any failure rejects the offer.',
+  },
+  {
+    step: '04',
+    title: 'x402 payment',
+    detail: 'Bound to the negotiated terms — a different request is refused before it is priced.',
+  },
+  {
+    step: '05',
+    title: 'Certificate + audit',
+    detail: 'An HTS certificate NFT to the payer, and an HCS entry anyone can read back.',
+  },
+];
+
 const CHAIN_STEPS = [
   'HCS audit log',
   'HCS reputation',
@@ -79,6 +108,30 @@ export default function HowItWorks() {
           title="Three fail-closed gates. Any failure rejects the offer."
           intro="A buyer agent sends a licence offer — track, shares, licence type, territory, use case, price. The seller agent runs it through three checks, in order. Any failure rejects; nothing partially succeeds."
         />
+
+        {/* The five-step path. Horizontal on desktop, stacked on mobile — the
+            arrows are decorative, so they drop out rather than rotate. */}
+        <div className="mt-14 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(5,1fr)] lg:gap-0">
+          {FLOW.map((item, i) => (
+            <div key={item.step} className="relative flex lg:items-stretch">
+              <div className="liquid-glass w-full rounded-2xl border border-accent/20 bg-accent/[0.04] p-5 lg:rounded-none lg:border-r-0 lg:first:rounded-l-2xl lg:last:rounded-r-2xl lg:last:border-r">
+                <p className="font-mono text-xs font-semibold tracking-[0.1em] text-accent-teal">
+                  {item.step}
+                </p>
+                <h3 className="mt-2 text-sm font-semibold text-white">{item.title}</h3>
+                <p className="mt-1.5 text-xs leading-relaxed text-white/60">{item.detail}</p>
+              </div>
+              {i < FLOW.length - 1 && (
+                <span
+                  className="pointer-events-none absolute top-1/2 -right-2 z-10 hidden -translate-y-1/2 text-accent/70 lg:block"
+                  aria-hidden="true"
+                >
+                  →
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
 
         <div className="mt-14 grid grid-cols-1 gap-4 md:grid-cols-3">
           {GATES.map((gate) => (
