@@ -23,6 +23,10 @@
         --danger: #f87171;
         --danger-dim: #3a1f22;
         --warn: #fbbf24;
+        /* One knob for the 2×2 grid: every panel is capped to this, so the four
+           cells stay aligned and each panel scrolls its own data instead of
+           stretching the page. */
+        --panel-h: 520px;
       }
       * { box-sizing: border-box; }
       body {
@@ -79,14 +83,17 @@
       .agents { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
       .agents b { color: var(--text); font-weight: 600; }
 
+      /* 2×2: terms + live negotiation on top, licences + audit trail below.
+         `stretch` is what makes the two panels in a row exactly as tall as each
+         other; --panel-h is what stops that row growing without limit. */
       main {
         display: grid;
-        grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 18px;
         padding: 20px 24px 40px;
-        align-items: start;
+        align-items: stretch;
       }
-      @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+      @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
 
       .panel {
         background: var(--panel);
@@ -95,6 +102,23 @@
         padding: 18px;
       }
       .col { display: flex; flex-direction: column; gap: 18px; }
+
+      /* A capped panel is a column: fixed chrome (heading, form, buttons) plus
+         exactly one `.grow` region that takes the slack and scrolls. `min-height: 0`
+         on both is what lets a flex child actually shrink enough to scroll. */
+      .panel.capped {
+        max-height: var(--panel-h);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .panel.capped > .grow {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      /* The sales table scrolls in both directions — it is the widest content. */
+      .table-wrap { overflow: auto; }
 
       label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
       textarea, input, select {
@@ -136,10 +160,10 @@
         word-break: break-word;
       }
 
+      /* Height comes from the capped panel now, not from a fixed max-height:
+         entries list downwards and the pane starts scrolling once it is full. */
       .log {
         font: 12.5px/1.7 ui-monospace, "Cascadia Code", Consolas, monospace;
-        max-height: 460px;
-        overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 6px;
@@ -203,7 +227,7 @@
       .declines { font-size: 12px; color: var(--muted); margin: 12px 0 0; line-height: 1.6; }
       .hint { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
 
-      .audit { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+      .audit { display: flex; flex-direction: column; gap: 6px; }
       .audit-entry {
         display: grid;
         grid-template-columns: 34px 1fr;
@@ -236,58 +260,24 @@
       </div>
     </header>
 
+    <!-- 2×2 grid. DOM order is grid order: terms, live negotiation, then
+         licences sold and the audit trail underneath them. -->
     <main>
-      <div class="col">
-        <!-- 1. Policy -->
-        <section class="panel">
-          <h2>Your terms</h2>
-          <label for="policy">Describe what you are willing to license, in your own words</label>
-          <textarea id="policy" rows="5" placeholder="e.g. Sell sync licences for my tracks, at least 0.05 HBAR per share, never more than 50% in total, and never for political advertising."></textarea>
-          <div class="actions">
-            <button id="save-policy">Save terms</button>
-            <button id="reset-policy" class="secondary">Reset</button>
-          </div>
-          <p class="status" id="policy-status"></p>
-          <div class="parsed" id="policy-parsed">No terms loaded yet.</div>
-        </section>
+      <!-- 1. Policy — top left -->
+      <section class="panel capped">
+        <h2>Your terms</h2>
+        <label for="policy">Describe what you are willing to license, in your own words</label>
+        <textarea id="policy" rows="5" placeholder="e.g. Sell sync licences for my tracks, at least 0.05 HBAR per share, never more than 50% in total, and never for political advertising."></textarea>
+        <div class="actions">
+          <button id="save-policy">Save terms</button>
+          <button id="reset-policy" class="secondary">Reset</button>
+        </div>
+        <p class="status" id="policy-status"></p>
+        <div class="parsed grow" id="policy-parsed">No terms loaded yet.</div>
+      </section>
 
-        <!-- 3. Earnings -->
-        <section class="panel">
-          <h2>Licences sold</h2>
-          <div class="stats">
-            <div class="stat earn"><div class="value" id="stat-earned">0 ℏ</div><div class="label">Earned</div></div>
-            <div class="stat"><div class="value" id="stat-sales">0</div><div class="label">Licences</div></div>
-            <div class="stat"><div class="value" id="stat-declined">0</div><div class="label">Refused</div></div>
-          </div>
-          <table>
-            <thead>
-              <tr><th>When</th><th>Buyer</th><th>Track</th><th>Licence</th><th>Paid</th><th>Payment</th><th>Certificate</th></tr>
-            </thead>
-            <tbody id="sales-body">
-              <tr><td colspan="7" class="empty">No licences sold yet.</td></tr>
-            </tbody>
-          </table>
-          <p class="declines" id="declines"></p>
-        </section>
-
-        <!-- 4. Audit trail -->
-        <section class="panel">
-          <h2>Audit trail on Hedera</h2>
-          <p class="declines" style="margin-top: -6px">
-            Read back from the mirror node, not from this app's own records.
-            <a id="topic-link" href="#" target="_blank" rel="noreferrer">view topic ↗</a>
-          </p>
-          <div class="audit" id="audit">
-            <p class="empty">Loading…</p>
-          </div>
-          <div class="actions">
-            <button id="refresh-audit" class="secondary">Refresh</button>
-          </div>
-        </section>
-      </div>
-
-      <!-- 2. Negotiation log -->
-      <section class="panel">
+      <!-- 2. Negotiation log — top right, same height as the terms panel -->
+      <section class="panel capped">
         <h2>Live negotiation</h2>
         <div class="row">
           <div style="flex: 1 1 220px">
@@ -337,8 +327,44 @@
         </div>
         <p class="hint" id="quote-hint"></p>
         <p class="status" id="run-status"></p>
-        <div class="log" id="log">
+        <div class="log grow" id="log">
           <p class="empty">Nothing yet — send an offer to watch the two agents negotiate.</p>
+        </div>
+      </section>
+
+      <!-- 3. Earnings — bottom left -->
+      <section class="panel capped">
+        <h2>Licences sold</h2>
+        <div class="stats">
+          <div class="stat earn"><div class="value" id="stat-earned">0 ℏ</div><div class="label">Earned</div></div>
+          <div class="stat"><div class="value" id="stat-sales">0</div><div class="label">Licences</div></div>
+          <div class="stat"><div class="value" id="stat-declined">0</div><div class="label">Refused</div></div>
+        </div>
+        <div class="table-wrap grow">
+          <table>
+            <thead>
+              <tr><th>When</th><th>Buyer</th><th>Track</th><th>Licence</th><th>Paid</th><th>Payment</th><th>Certificate</th></tr>
+            </thead>
+            <tbody id="sales-body">
+              <tr><td colspan="7" class="empty">No licences sold yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="declines" id="declines"></p>
+      </section>
+
+      <!-- 4. Audit trail — bottom right -->
+      <section class="panel capped">
+        <h2>Audit trail on Hedera</h2>
+        <p class="declines" style="margin-top: -6px">
+          Read back from the mirror node, not from this app's own records.
+          <a id="topic-link" href="#" target="_blank" rel="noreferrer">view topic ↗</a>
+        </p>
+        <div class="audit grow" id="audit">
+          <p class="empty">Loading…</p>
+        </div>
+        <div class="actions">
+          <button id="refresh-audit" class="secondary">Refresh</button>
         </div>
       </section>
     </main>
